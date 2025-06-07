@@ -14,8 +14,11 @@ public protocol TokenManagerProtocol: Sendable {
 // MARK: - 拦截器协议与默认实现
 /// 拦截器协议,继承该协议自己实现,也可继承自DefaultInterceptor重写方法
 public protocol RequestInterceptorProtocol: Sendable {
+    /// 请求拦截
     func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest
+    /// 响应拦截
     func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
+    /// 走拦截器，但是响应完整数据
     func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
 }
 
@@ -99,9 +102,28 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
             return .failure(makeError(domain: "NetworkError", code: -1, message: "无效的服务器响应"))
         }
         
-        // 处理 HTTP 状态码
-        if let error = handleHTTPStatusCode(httpResponse.statusCode) {
-            return .failure(error)
+        // 处理数据转换
+        guard let data = response.data else {
+            return .failure(makeError(
+                domain: "DataError",
+                code: httpResponse.statusCode,
+                message: "响应数据为空"
+            ))
+        }
+        
+        return processSpecificResponseData(data: data, response: httpResponse)
+    }
+    
+    /// 获取响应为完整数据
+    open func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
+        // 处理网络层错误
+        if let error = response.error {
+            return .failure(handleAFError(error))
+        }
+        
+        // 验证基础响应
+        guard let httpResponse = response.response else {
+            return .failure(makeError(domain: "NetworkError", code: -1, message: "无效的服务器响应"))
         }
         
         // 处理数据转换
@@ -112,101 +134,67 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
                 message: "响应数据为空"
             ))
         }
-        return processData(data: data,response: httpResponse, isCompleteResponse: false)
-
+        
+        return processCompleteResponseData(data: data, response: httpResponse)
     }
     
-    /// 获取响应为完整数据
-    open func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
-        // 基础验证与 interceptResponse 保持一致
-        if let error = response.error {
-            return .failure(handleAFError(error))
-        }
-        
-        guard let httpResponse = response.response else {
-            return .failure(makeError(domain: "NetworkError", code: -1, message: "无效的服务器响应"))
-        }
-        
-        guard let data = response.data else {
-            return .failure(makeError(
-                domain: "DataError",
-                code: httpResponse.statusCode,
-                message: "响应数据为空"
-            ))
-        }
-        
-        return processData(data: data,response: httpResponse, isCompleteResponse: true)
+    // MARK: - Public Customizable Methods
+    /// 判断响应是否成功（可重写）
+    /// - Parameters:
+    ///   - code: 响应中的状态码
+    ///   - json: 响应的JSON数据
+    /// - Returns: 是否成功
+    open func isResponseSuccess(code: Int, json: JSON) -> Bool {
+        return isSuccessResponse(code: code, json: json)
     }
     
-    // MARK: - Core Processing
-    private func processData(
-        data: Data,
-        response: HTTPURLResponse,
-        isCompleteResponse: Bool = false
-    ) -> Result<Data, Error> {
-        let statusCode = response.statusCode
-        
-        // 先处理 HTTP 状态码
-        if let httpError = handleHTTPStatusCode(statusCode) {
-            return .failure(httpError)
-        }
-        
-        do {
-            let json = try JSON(data: data)
-            
-            // 这里根据你的接口定义，比如一般有 "code" 字段
-            let code = json["code"].intValue // 注意：SwiftyJSON提供默认值
-            
-            if code != 0 {
-                // 走业务错误处理
-                return handleCustomError(
-                    code: code,
-                    jsonData: data,
-                    httpResponse: response,
-                    isCompleteResponse: isCompleteResponse
-                )
-            } else {
-                // 业务正常，返回成功
-                return .success(data)
-            }
-            
-        } catch {
-            // SwiftyJSON解析失败（虽然 SwiftyJSON 本身不会抛异常，但保险起见）
-            let parsingError = handleJSONError(error, statusCode: statusCode)
-            return .failure(parsingError)
-        }
-    }
-    
-    
-    // MARK: - Data Processing
-    private func parseCodeAndMessage(from json: [String: Any], statusCode: Int) throws -> Result<Int, Error> {
-        guard let codeValue = json["code"] else {
-            return .failure(makeError(
-                domain: "DataError",
-                code: statusCode,
-                message: json["msg"] as? String ?? "缺少状态码字段"
-            ))
-        }
-        
-        let code: Int
-        
-        if let intCode = codeValue as? Int {
-            code = intCode
-        } else if let stringCode = codeValue as? String, let intValue = Int(stringCode) {
-            code = intValue
-        } else {
-            throw makeError(
-                domain: "DataError",
-                code: statusCode,
-                message: "非法的状态码格式"
-            )
-        }
-        
-        return .success(code)
-    }
-    
-    /// **提取成功数据** (子类可继承并自定义成功数据处理)  ** 默认获取指定key值中的数据,如果找不到返回完整数据 **
+    /// 从JSON中提取成功数据（可重写）
+    /// - Parameters:
+    ///   - json: 响应的JSON数据
+    ///   - data: 原始响应数据
+    /// - Returns: 提取的数据结果
     open func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
+        return extractDataFromJSON(json, originalData: data)
+    }
+    
+    /// 处理自定义错误（可重写）
+    /// - Parameters:
+    ///   - code: 业务状态码
+    ///   - jsonData: 响应JSON数据
+    ///   - httpResponse: HTTP响应
+    ///   - isCompleteResponse: 是否返回完整响应
+    /// - Returns: 处理结果
+    open func handleCustomError(
+        code: Int,
+        jsonData: Data,
+        httpResponse: HTTPURLResponse,
+        isCompleteResponse: Bool
+    ) -> Result<Data, Error> {
+        return processErrorResponseData(
+            code: code,
+            jsonData: jsonData,
+            httpResponse: httpResponse,
+            isCompleteResponse: isCompleteResponse
+        )
+    }
+    
+    // MARK: - Private Implementation Methods
+    
+    /// 判断响应是否成功
+    /// - Parameters:
+    ///   - code: 响应中的状态码
+    ///   - json: 响应的JSON数据
+    /// - Returns: 是否成功
+    private func isSuccessResponse(code: Int, json: JSON) -> Bool {
+        return code == successCode
+    }
+    
+    /// 从JSON中提取成功数据
+    /// - Parameters:
+    ///   - json: 响应的JSON数据
+    ///   - data: 原始响应数据
+    /// - Returns: 提取的数据结果
+    private func extractDataFromJSON(_ json: JSON, originalData data: Data) -> Result<Data, Error> {
         let targetData = json[successDataKey]
         
         // 如果不存在或者是 null，直接返回原始 data
@@ -241,6 +229,125 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
                 underlyingError: error
             ))
         }
+    }
+    
+    /// 处理完整响应数据
+    /// - Parameters:
+    ///   - data: 响应数据
+    ///   - response: HTTP响应
+    /// - Returns: 处理结果
+    private func processCompleteResponseData(
+        data: Data,
+        response: HTTPURLResponse
+    ) -> Result<Data, Error> {
+        let statusCode = response.statusCode
+        
+        // 先处理 HTTP 状态码
+        if let httpError = handleHTTPStatusCode(statusCode) {
+            return .failure(httpError)
+        }
+        
+        do {
+            let json = try JSON(data: data)
+            
+            // 获取业务状态码
+            let code = json["code"].intValue
+            
+            // 判断响应是否成功
+            if !isResponseSuccess(code: code, json: json) {
+                // 走业务错误处理
+                return handleCustomError(
+                    code: code,
+                    jsonData: data,
+                    httpResponse: response,
+                    isCompleteResponse: true
+                )
+            } else {
+                // 业务正常，返回成功
+                return .success(data)
+            }
+            
+        } catch {
+            // JSON解析失败
+            let parsingError = handleJSONError(error, statusCode: statusCode)
+            return .failure(parsingError)
+        }
+    }
+    
+    /// 处理指定响应数据
+    /// - Parameters:
+    ///   - data: 响应数据
+    ///   - response: HTTP响应
+    /// - Returns: 处理结果
+    private func processSpecificResponseData(
+        data: Data,
+        response: HTTPURLResponse
+    ) -> Result<Data, Error> {
+        let statusCode = response.statusCode
+        
+        // 先处理 HTTP 状态码
+        if let httpError = handleHTTPStatusCode(statusCode) {
+            return .failure(httpError)
+        }
+        
+        do {
+            let json = try JSON(data: data)
+            
+            // 获取业务状态码
+            let code = json["code"].intValue
+            
+            // 判断响应是否成功
+            if !isResponseSuccess(code: code, json: json) {
+                // 走业务错误处理
+                return handleCustomError(
+                    code: code,
+                    jsonData: data,
+                    httpResponse: response,
+                    isCompleteResponse: false
+                )
+            } else {
+                // 业务正常，提取指定数据
+                return extractSuccessData(from: json, data: data)
+            }
+            
+        } catch {
+            // JSON解析失败
+            let parsingError = handleJSONError(error, statusCode: statusCode)
+            return .failure(parsingError)
+        }
+    }
+    
+    /// 处理错误响应数据
+    /// - Parameters:
+    ///   - code: 业务状态码
+    ///   - jsonData: 响应JSON数据
+    ///   - httpResponse: HTTP响应
+    ///   - isCompleteResponse: 是否返回完整响应
+    /// - Returns: 处理结果
+    private func processErrorResponseData(
+        code: Int,
+        jsonData: Data,
+        httpResponse: HTTPURLResponse,
+        isCompleteResponse: Bool
+    ) -> Result<Data, Error> {
+        let json = try? JSON(data: jsonData)
+        let message = json?["msg"].string ?? "请求失败"
+        
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: message,
+            "statusCode": httpResponse.statusCode,
+            "responseCode": code
+        ]
+        
+        if isCompleteResponse {
+            userInfo["responseData"] = jsonData
+        }
+        
+        return .failure(NSError(
+            domain: "BusinessError",
+            code: code,
+            userInfo: userInfo
+        ))
     }
     
     // MARK: - Error Handling
@@ -322,68 +429,6 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         }
     }
     
-    /// **子类可重写该方法，仅修改错误处理逻辑**
-    /// - Parameters:
-    ///   - code: 服务器返回的错误码
-    ///   - jsonData: 原始 JSON
-    ///   - httpResponse: HTTP 响应
-    ///   - data: 响应数据
-    ///   - isCompleteResponse: 是否响应完整数据
-    /// - Returns: `Result<Data, Error>`
-//    open func handleCustomError(
-//        code: Int,
-//        jsonData: Data,
-//        httpResponse: HTTPURLResponse,
-//        isCompleteResponse: Bool
-//    ) -> Result<Data, Error> {
-//        let json = JSON(jsonData)
-//        let message = json["msg"].stringValue.isEmpty ? "请求失败" : json["msg"].stringValue
-//        
-//        var userInfo: [String: Any] = [
-//            NSLocalizedDescriptionKey: message,
-//            "statusCode": httpResponse.statusCode,
-//            "responseCode": code
-//        ]
-//        
-//        if isCompleteResponse {
-//            userInfo["responseData"] = jsonData
-//        }
-//        
-//        return .failure(NSError(
-//            domain: "BusinessError",
-//            code: code,
-//            userInfo: userInfo
-//        ))
-//    }
-    open func handleCustomError(
-        code: Int,
-        jsonData: Data,
-        httpResponse: HTTPURLResponse,
-        isCompleteResponse: Bool
-    ) -> Result<Data, Error> {
-        let json = try? JSON(data: jsonData)
-        let message = json?["msg"].string ?? "请求失败"
-        
-        var userInfo: [String: Any] = [
-            NSLocalizedDescriptionKey: message,
-            "statusCode": httpResponse.statusCode,
-            "responseCode": code
-        ]
-        
-        if isCompleteResponse {
-            userInfo["responseData"] = jsonData
-        }
-        
-        return .failure(NSError(
-            domain: "BusinessError",
-            code: code,
-            userInfo: userInfo
-        ))
-    }
-    
-    
-    
-    
     // MARK: - Utilities
     private func makeError(
         domain: String,
@@ -444,3 +489,4 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
         }
     }
 }
+
