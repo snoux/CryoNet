@@ -3,40 +3,141 @@ import Alamofire
 import SwiftUI
 import SwiftyJSON
 
+/// CryoNet配置对象
+@available(macOS 10.15, iOS 13, *)
+public struct CryoNetConfiguration {
+    /// 基础URL，用于与请求路径拼接
+    public var basicURL: String
+    
+    /// 基础HTTP请求头，会与每个请求的头部合并
+    public var basicHeaders: [HTTPHeader]
+    
+    /// 默认请求超时时间（秒）
+    public var defaultTimeout: TimeInterval
+    
+    /// 默认最大并发下载数
+    public var maxConcurrentDownloads: Int
+    
+    /// 初始化配置
+    public init(
+        basicURL: String = "",
+        basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
+        defaultTimeout: TimeInterval = 30,
+        maxConcurrentDownloads: Int = 6
+    ) {
+        self.basicURL = basicURL
+        self.basicHeaders = basicHeaders
+        self.defaultTimeout = defaultTimeout
+        self.maxConcurrentDownloads = maxConcurrentDownloads
+    }
+}
+
 /// CryoNet 网络请求核心封装类
 @available(macOS 10.15, iOS 13, *)
 public final class CryoNet {
     
     // MARK: - 属性
+    
+    /// 全局配置
+    private static var configuration = CryoNetConfiguration()
+    
+    /// Token管理器
     private var tokenManager: TokenManagerProtocol
+    
+    /// 请求拦截器
     private var interceptor: RequestInterceptorProtocol
+    
+    /// 单例实例
     private static var instance: CryoNet?
 
     // MARK: - 初始化方法
+    
+    /// 私有初始化方法
+    /// - Parameters:
+    ///   - url: 基础URL，如果提供则会更新配置
+    ///   - tokenManager: Token管理器，默认使用DefaultTokenManager
+    ///   - interceptor: 请求拦截器，默认使用DefaultInterceptor
     private init(
         _ url: String?,
         tokenManager: TokenManagerProtocol = DefaultTokenManager(),
         interceptor: RequestInterceptorProtocol = DefaultInterceptor()
     ) {
-        GlobalManager.Basic_URL = url ?? ""
+        if let url = url, !url.isEmpty {
+            CryoNet.configuration.basicURL = url
+        }
         self.tokenManager = tokenManager
         self.interceptor = interceptor
     }
 
+    // MARK: - 配置管理
+    
+    /// 获取当前配置
+    /// - Returns: 当前CryoNet配置
+    public static func getConfiguration() -> CryoNetConfiguration {
+        return configuration
+    }
+    
+    /// 设置新的配置
+    /// - Parameter config: 新的配置对象
+    public static func setConfiguration(_ config: CryoNetConfiguration) {
+        configuration = config
+    }
+    
+    /// 更新部分配置
+    /// - Parameter update: 配置更新闭包
+    public static func updateConfiguration(_ update: (inout CryoNetConfiguration) -> Void) {
+        var config = configuration
+        update(&config)
+        configuration = config
+    }
+    
+    /// 设置基础URL
+    /// - Parameter url: 基础URL字符串
+    public static func setBasicURL(_ url: String) {
+        configuration.basicURL = url
+    }
+    
+    /// 设置基础请求头
+    /// - Parameter headers: HTTP请求头数组
+    public static func setBasicHeaders(_ headers: [HTTPHeader]) {
+        configuration.basicHeaders = headers
+    }
+    
+    /// 添加基础请求头
+    /// - Parameter header: 要添加的HTTP请求头
+    public static func addBasicHeader(_ header: HTTPHeader) {
+        configuration.basicHeaders.append(header)
+    }
+    
+    /// 设置默认超时时间
+    /// - Parameter timeout: 超时时间（秒）
+    public static func setDefaultTimeout(_ timeout: TimeInterval) {
+        configuration.defaultTimeout = timeout
+    }
+
     // MARK: - 单例调用
+    
+    /// 获取CryoNet共享实例
+    /// - Parameter url: 可选的基础URL，如果提供则会更新配置
+    /// - Returns: CryoNet实例
     public static func sharedInstance(_ url: String? = nil) -> CryoNet {
         if instance == nil {
             instance = CryoNet(url)
+        } else if let url = url, !url.isEmpty {
+            // 如果实例已存在但提供了新的URL，则更新配置
+            configuration.basicURL = url
         }
         return instance!
     }
 
-    /// 设置 Token 管理器
+    /// 设置Token管理器
+    /// - Parameter tokenManager: 新的Token管理器
     public func setTokenManager(_ tokenManager: TokenManagerProtocol) {
         self.tokenManager = tokenManager
     }
 
     /// 设置请求拦截器
+    /// - Parameter interceptor: 新的请求拦截器
     public func setInterceptor(_ interceptor: RequestInterceptorProtocol) {
         self.interceptor = interceptor
     }
@@ -47,6 +148,13 @@ public final class CryoNet {
 private extension CryoNet {
 
     /// 上传文件私有方法
+    /// - Parameters:
+    ///   - model: 请求模型
+    ///   - files: 上传文件数组
+    ///   - parameters: 附加参数
+    ///   - headers: 请求头
+    ///   - interceptor: 可选的请求拦截器
+    /// - Returns: 数据请求对象
     func uploadFile(
         _ model: RequestModel,
         files: [UploadData],
@@ -83,7 +191,9 @@ private extension CryoNet {
         )
     }
 
-    /// 将任意类型转换为 Data
+    /// 将任意类型转换为Data
+    /// - Parameter value: 任意类型的值
+    /// - Returns: 转换后的Data，如果无法转换则返回nil
     func anyToData(_ value: Any) -> Data? {
         switch value {
         case let int as Int:
@@ -104,8 +214,10 @@ private extension CryoNet {
     }
 
     /// 合并请求头
+    /// - Parameter headers: 请求特定的HTTP请求头
+    /// - Returns: 合并后的HTTP请求头
     func mergeHeaders(_ headers: [HTTPHeader]) -> HTTPHeaders {
-        let allHeaders = GlobalManager.Basic_Headers + headers
+        let allHeaders = CryoNet.configuration.basicHeaders + headers
         return HTTPHeaders(allHeaders)
     }
 }
@@ -115,6 +227,13 @@ private extension CryoNet {
 public extension CryoNet {
 
     /// 上传接口
+    /// - Parameters:
+    ///   - model: 请求模型
+    ///   - files: 上传文件数组
+    ///   - parameters: 附加参数
+    ///   - headers: 请求头
+    ///   - interceptor: 可选的请求拦截器
+    /// - Returns: CryoResult对象
     @discardableResult
     func upload(
         _ model: RequestModel,
@@ -138,6 +257,12 @@ public extension CryoNet {
     }
 
     /// 普通请求接口
+    /// - Parameters:
+    ///   - model: 请求模型
+    ///   - parameters: 请求参数
+    ///   - headers: 请求头
+    ///   - interceptor: 可选的请求拦截器
+    /// - Returns: CryoResult对象
     @discardableResult
     func request(
         _ model: RequestModel,
@@ -163,14 +288,18 @@ public extension CryoNet {
     }
 
     /// 文件下载接口（支持批量下载）
+    /// - Parameters:
+    ///   - model: 下载模型
+    ///   - progress: 下载进度回调
+    ///   - result: 下载结果回调
     func downloadFile(
         _ model: DownloadModel,
         progress: @escaping (DownloadItem) -> Void,
         result: @escaping (DownloadResult) -> Void = { _ in }
     ) {
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 6
-        let semaphore = DispatchSemaphore(value: 6)
+        queue.maxConcurrentOperationCount = CryoNet.configuration.maxConcurrentDownloads
+        let semaphore = DispatchSemaphore(value: CryoNet.configuration.maxConcurrentDownloads)
 
         for item in model.models {
             guard item.fileURL != nil else { continue }

@@ -90,7 +90,7 @@ public struct RequestModel {
     
     /// 处理后的url
     var appendURL: String {
-        applyBasicURL ? GlobalManager.Basic_URL + url :  url
+        applyBasicURL ? CryoNet.getConfiguration().basicURL + url : url
     }
     
     public init(
