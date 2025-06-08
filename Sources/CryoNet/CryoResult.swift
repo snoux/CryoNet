@@ -7,7 +7,7 @@ import Alamofire
 @available(macOS 10.15, iOS 13, *)
 public struct CryoResult: Sendable {
     public let request: DataRequest
-    private let interceptor: RequestInterceptorProtocol
+    let interceptor: RequestInterceptorProtocol
     
     /// 初始化方法
     /// - Parameters:
@@ -21,7 +21,7 @@ public struct CryoResult: Sendable {
         self.interceptor = interceptor
     }
     
-    private func debugRequestLog(_ data: Data?, error: String? = nil, fromInterceptor: Bool) {
+    internal func debugRequestLog(_ data: Data?, error: String? = nil, fromInterceptor: Bool, interceptorInfo: [String: Any]? = nil) {
         #if DEBUG
         guard let request = self.request.request else {
             debugLog("无效的请求,请检查 \(error ?? "")")
@@ -41,6 +41,14 @@ public struct CryoResult: Sendable {
         logContent += "请求地址: \(urlString)"
         logContent += headersInfo
         logContent += httpBodyInfo
+        
+        // 添加拦截器配置信息（如果有）
+        if let interceptorInfo = interceptorInfo, !interceptorInfo.isEmpty {
+            logContent += "\n拦截器配置信息:"
+            for (key, value) in interceptorInfo {
+                logContent += "\n  - \(key): \(value)"
+            }
+        }
         
         if let error = error {
             logContent += "\n\(responseType)失败!\(error)"
@@ -98,6 +106,23 @@ struct GenericCryoError: CryoError {
     
     init(_ error: Error) {
         self.underlyingError = error
+    }
+}
+
+// MARK: - 拦截器错误包装器
+struct InterceptorError: CryoError {
+    let message: String
+    let originalData: Data?
+    let interceptorInfo: [String: Any]?
+    
+    var localizedDescription: String {
+        return message
+    }
+    
+    init(message: String, originalData: Data? = nil, interceptorInfo: [String: Any]? = nil) {
+        self.message = message
+        self.originalData = originalData
+        self.interceptorInfo = interceptorInfo
     }
 }
 
@@ -218,6 +243,14 @@ extension CryoResult {
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
 
+    // 获取拦截器配置信息
+    func getInterceptorInfo() -> [String: Any]? {
+        if let configProvider = interceptor as? InterceptorConfigProvider {
+            return configProvider.getInterceptorConfig()
+        }
+        return nil
+    }
+
     // MARK: - 单个模型
     @discardableResult
     public func interceptModel<T: Codable>(
@@ -226,19 +259,33 @@ extension CryoResult {
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
         self.request.response { response in
+            // 获取拦截器配置信息
+            let interceptorInfo = self.getInterceptorInfo()
+            
+            // 保存原始响应数据用于调试
+            let originalData = response.data
+            
             switch self.interceptor.interceptResponse(response) {
             case .success(let data):
                 do {
                     let model = try JSONDecoder().decode(T.self, from: data)
-                    debugRequestLog(data, fromInterceptor: true)
+                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     success(model)
                 } catch {
-                    failed("DataToModel失败: \(error.localizedDescription)")
-                    debugRequestLog(data, error: "DataToModel失败: \(error.localizedDescription)", fromInterceptor: true)
+                    let errorMessage = "DataToModel失败: \(error.localizedDescription)"
+                    failed(errorMessage)
+                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
-                debugRequestLog(nil, error: error.localizedDescription, fromInterceptor: true)
-                failed(error.localizedDescription)
+                let errorMessage = error.localizedDescription
+                failed(errorMessage)
+                
+                // 如果有原始数据，打印出来以便调试
+                if let originalData = originalData {
+                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
+                } else {
+                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                }
             }
         }
         return self
@@ -252,19 +299,33 @@ extension CryoResult {
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
         self.request.response { response in
+            // 获取拦截器配置信息
+            let interceptorInfo = self.getInterceptorInfo()
+            
+            // 保存原始响应数据用于调试
+            let originalData = response.data
+            
             switch self.interceptor.interceptResponseWithCompleteData(response) {
             case .success(let data):
                 do {
                     let model = try JSONDecoder().decode(T.self, from: data)
-                    debugRequestLog(data, fromInterceptor: true)
+                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     success(model)
                 } catch {
-                    failed("DataToModel失败: \(error.localizedDescription)")
-                    debugRequestLog(data, error: "DataToModel失败: \(error.localizedDescription)", fromInterceptor: true)
+                    let errorMessage = "DataToModel失败: \(error.localizedDescription)"
+                    failed(errorMessage)
+                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
-                debugRequestLog(nil, error: error.localizedDescription, fromInterceptor: true)
-                failed(error.localizedDescription)
+                let errorMessage = error.localizedDescription
+                failed(errorMessage)
+                
+                // 如果有原始数据，打印出来以便调试
+                if let originalData = originalData {
+                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
+                } else {
+                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                }
             }
         }
         return self
@@ -277,19 +338,33 @@ extension CryoResult {
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
         self.request.response { response in
+            // 获取拦截器配置信息
+            let interceptorInfo = self.getInterceptorInfo()
+            
+            // 保存原始响应数据用于调试
+            let originalData = response.data
+            
             switch self.interceptor.interceptResponseWithCompleteData(response) {
             case .success(let data):
                 do {
                     let json = try JSON(data: data)
-                    debugRequestLog(data, fromInterceptor: true)
+                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     success(json)
                 } catch {
-                    failed("JSON解析失败: \(error.localizedDescription)")
-                    debugRequestLog(data, error: "JSON解析失败: \(error.localizedDescription)", fromInterceptor: true)
+                    let errorMessage = "JSON解析失败: \(error.localizedDescription)"
+                    failed(errorMessage)
+                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
-                debugRequestLog(nil, error: error.localizedDescription, fromInterceptor: true)
-                failed(error.localizedDescription)
+                let errorMessage = error.localizedDescription
+                failed(errorMessage)
+                
+                // 如果有原始数据，打印出来以便调试
+                if let originalData = originalData {
+                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
+                } else {
+                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                }
             }
         }
         return self
@@ -303,19 +378,33 @@ extension CryoResult {
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
         self.request.response { response in
+            // 获取拦截器配置信息
+            let interceptorInfo = self.getInterceptorInfo()
+            
+            // 保存原始响应数据用于调试
+            let originalData = response.data
+            
             switch self.interceptor.interceptResponse(response) {
             case .success(let data):
                 do {
                     let modelArray = try JSONDecoder().decode([T].self, from: data)
-                    debugRequestLog(data, fromInterceptor: true)
+                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     success(modelArray)
                 } catch {
-                    failed("DataToModel数组失败: \(error.localizedDescription)")
-                    debugRequestLog(data, error: "DataToModel数组失败: \(error.localizedDescription)", fromInterceptor: true)
+                    let errorMessage = "DataToModel数组失败: \(error.localizedDescription)"
+                    failed(errorMessage)
+                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
-                debugRequestLog(nil, error: error.localizedDescription, fromInterceptor: true)
-                failed(error.localizedDescription)
+                let errorMessage = error.localizedDescription
+                failed(errorMessage)
+                
+                // 如果有原始数据，打印出来以便调试
+                if let originalData = originalData {
+                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
+                } else {
+                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                }
             }
         }
         return self
@@ -391,11 +480,11 @@ extension CryoResult {
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
     /// 统一拦截器错误处理
-    private func handleInterceptorError(_ error: String) -> Error {
-        return NSError(
-            domain: "InterceptorError",
-            code: -1,
-            userInfo: [NSLocalizedDescriptionKey: error]
+    internal func handleInterceptorError(_ error: String) -> Error {
+        let interceptorInfo = getInterceptorInfo()
+        return InterceptorError(
+            message: error,
+            interceptorInfo: interceptorInfo
         )
     }
     
@@ -442,5 +531,14 @@ extension CryoResult {
             }
         }
     }
+}
+
+
+
+
+// MARK: - 拦截器配置提供者协议
+public protocol InterceptorConfigProvider {
+    /// 获取拦截器配置信息
+    func getInterceptorConfig() -> [String: Any]
 }
 
