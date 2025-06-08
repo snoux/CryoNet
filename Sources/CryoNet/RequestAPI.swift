@@ -83,7 +83,7 @@ public struct RequestModel {
     var encoding:ParameterEncoder = .jsonDefault
     
     /// 超时时间
-    var overtime:Double = 5
+    var overtime:Double = CryoNet.getConfiguration().defaultTimeout
     
     /// 接口说明
     var explain:String = ""
