@@ -2,6 +2,233 @@ import Foundation
 import Alamofire
 import SwiftyJSON
 
+// MARK: - 响应结构配置协议
+/// 响应结构配置协议
+public protocol ResponseStructureConfig: Sendable {
+    /// 状态码字段的key
+    var codeKey: String { get }
+    
+    /// 消息字段的key
+    var messageKey: String { get }
+    
+    /// 数据字段的key
+    var dataKey: String { get }
+    
+    /// 成功状态码
+    var successCode: Int { get }
+    
+    /// 判断响应是否成功
+    func isSuccess(json: JSON) -> Bool
+    
+    /// 从JSON中提取数据
+    func extractData(from json: JSON, originalData: Data) -> Result<Data, Error>
+}
+
+// MARK: - 默认响应结构配置
+/// 默认响应结构配置
+open class DefaultResponseStructure: ResponseStructureConfig {
+    
+    // 请求状态码key值
+    open var codeKey: String
+    // 返回说明
+    open var messageKey: String
+    // 请求结果Key值
+    open var dataKey: String
+    // 成功状态
+    open var successCode: Int
+    
+    public init(
+        codeKey: String = "code",
+        messageKey: String = "msg",
+        dataKey: String = "data",
+        successCode: Int = 200
+    ) {
+        self.codeKey = codeKey
+        self.messageKey = messageKey
+        self.dataKey = dataKey
+        self.successCode = successCode
+    }
+    
+    open func isSuccess(json: JSON) -> Bool {
+        return json[codeKey].intValue == successCode
+    }
+    
+    open func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
+        let targetData = json[dataKey]
+        
+        // 如果不存在或者是 null，直接返回原始 data
+        if !targetData.exists() || targetData.type == .null {
+            return .success(originalData)
+        }
+        
+        do {
+            let validData: Data
+            
+            switch targetData.type {
+            case .dictionary, .array:
+                validData = try targetData.rawData()
+                
+            case .string:
+                validData = Data(targetData.stringValue.utf8)
+                
+            case .number, .bool:
+                let stringValue = targetData.stringValue
+                validData = Data(stringValue.utf8)
+                
+            default:
+                return .success(originalData)
+            }
+            
+            return .success(validData)
+        } catch {
+            return .failure(NSError(
+                domain: "DataError",
+                code: -1004,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "数据转换失败",
+                    NSUnderlyingErrorKey: error
+                ]
+            ))
+        }
+    }
+    
+    // 获取配置信息
+    public func getConfigInfo() -> [String: Any] {
+        return [
+            "codeKey": codeKey,
+            "messageKey": messageKey,
+            "dataKey": dataKey,
+            "successCode": successCode
+        ]
+    }
+}
+
+// MARK: - 嵌套响应结构配置
+/// 嵌套响应结构配置
+public struct NestedResponseStructure: ResponseStructureConfig {
+    public let codeKey: String
+    public let messageKey: String
+    public let dataKey: String
+    public let successCode: Int
+    public let resultKey: String
+    
+    public init(
+        codeKey: String,
+        messageKey: String,
+        dataKey: String,
+        successCode: Int,
+        resultKey: String
+    ) {
+        self.codeKey = codeKey
+        self.messageKey = messageKey
+        self.dataKey = dataKey
+        self.successCode = successCode
+        self.resultKey = resultKey
+    }
+    
+    public func isSuccess(json: JSON) -> Bool {
+        return json[codeKey].intValue == successCode
+    }
+    
+    public func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
+        // 先获取result对象
+        let resultData = json[resultKey]
+        
+        // 如果result不存在，返回原始数据
+        if !resultData.exists() || resultData.type == .null {
+            return .success(originalData)
+        }
+        
+        // 从result中获取data
+        let targetData = resultData[dataKey]
+        
+        // 如果不存在或者是 null，直接返回result数据
+        if !targetData.exists() || targetData.type == .null {
+            do {
+                return .success(try resultData.rawData())
+            } catch {
+                return .success(originalData)
+            }
+        }
+        
+        do {
+            let validData: Data
+            
+            switch targetData.type {
+            case .dictionary, .array:
+                validData = try targetData.rawData()
+                
+            case .string:
+                validData = Data(targetData.stringValue.utf8)
+                
+            case .number, .bool:
+                let stringValue = targetData.stringValue
+                validData = Data(stringValue.utf8)
+                
+            default:
+                return .success(originalData)
+            }
+            
+            return .success(validData)
+        } catch {
+            return .failure(NSError(
+                domain: "DataError",
+                code: -1004,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "数据转换失败",
+                    NSUnderlyingErrorKey: error
+                ]
+            ))
+        }
+    }
+    
+    // 获取配置信息
+    public func getConfigInfo() -> [String: Any] {
+        return [
+            "codeKey": codeKey,
+            "messageKey": messageKey,
+            "dataKey": dataKey,
+            "successCode": successCode,
+            "resultKey": resultKey
+        ]
+    }
+}
+
+// MARK: - 响应结构配置工厂方法
+public extension ResponseStructureConfig {
+    /// 创建标准响应结构配置
+    static func standard(
+        codeKey: String = "code",
+        messageKey: String = "msg",
+        dataKey: String = "data",
+        successCode: Int = 200
+    ) -> ResponseStructureConfig {
+        return DefaultResponseStructure(
+            codeKey: codeKey,
+            messageKey: messageKey,
+            dataKey: dataKey,
+            successCode: successCode
+        )
+    }
+    
+    /// 创建嵌套响应结构配置
+    static func nested(
+        codeKey: String,
+        messageKey: String,
+        resultKey: String,
+        dataKey: String,
+        successCode: Int
+    ) -> ResponseStructureConfig {
+        return NestedResponseStructure(
+            codeKey: codeKey,
+            messageKey: messageKey,
+            dataKey: dataKey,
+            successCode: successCode,
+            resultKey: resultKey
+        )
+    }
+}
+
 // MARK: - Token 管理协议与默认实现
 /// Token 管理协议,继承该协议自己实现,也可继承自DefaultTokenManager重写方法
 public protocol TokenManagerProtocol: Sendable {
@@ -58,19 +285,30 @@ open class DefaultTokenManager: TokenManagerProtocol,@unchecked Sendable {
 
 // MARK: - 默认拦截器
 /// 默认拦截器,可以继承重写
-open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
+open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, @unchecked Sendable {
     
     // MARK: - Configuration
-    public let successCode: Int
-    private let successDataKey: String
+    private let responseConfig: ResponseStructureConfig
     
+    /// 初始化方法
+    /// - Parameters:
+    ///   - responseConfig: 响应结构配置，默认使用标准配置
+    public init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
+        self.responseConfig = responseConfig
+    }
+    
+    // 为了向后兼容，保留原来的初始化方法
     /// 初始化方法
     /// - Parameters:
     ///   - successCode: 成功状态码，默认 200
     ///   - successDataKey: 成功数据字段名，默认 "data"
-    public init(successCode: Int = 200, successDataKey: String = "data") {
-        self.successCode = successCode
-        self.successDataKey = successDataKey
+    public convenience init(successCode: Int = 200, successDataKey: String = "data") {
+        self.init(responseConfig: DefaultResponseStructure(
+            codeKey: "code",
+            messageKey: "msg",
+            dataKey: successDataKey,
+            successCode: successCode
+        ))
     }
     
     // MARK: - Request Interception
@@ -141,11 +379,10 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
     // MARK: - Public Customizable Methods
     /// 判断响应是否成功（可重写）
     /// - Parameters:
-    ///   - code: 响应中的状态码
     ///   - json: 响应的JSON数据
     /// - Returns: 是否成功
-    open func isResponseSuccess(code: Int, json: JSON) -> Bool {
-        return isSuccessResponse(code: code, json: json)
+    open func isResponseSuccess(json: JSON) -> Bool {
+        return responseConfig.isSuccess(json: json)
     }
     
     /// 从JSON中提取成功数据（可重写）
@@ -154,7 +391,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
     ///   - data: 原始响应数据
     /// - Returns: 提取的数据结果
     open func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
-        return extractDataFromJSON(json, originalData: data)
+        return responseConfig.extractData(from: json, originalData: data)
     }
     
     /// 处理自定义错误（可重写）
@@ -178,58 +415,26 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         )
     }
     
+    // MARK: - InterceptorConfigProvider 实现
+    /// 获取拦截器配置信息
+    public func getInterceptorConfig() -> [String: Any] {
+        var config: [String: Any] = [
+            "interceptorType": String(describing: type(of: self))
+        ]
+        
+        // 添加响应配置信息
+        if let defaultConfig = responseConfig as? DefaultResponseStructure {
+            config.merge(defaultConfig.getConfigInfo()) { (_, new) in new }
+        } else if let nestedConfig = responseConfig as? NestedResponseStructure {
+            config.merge(nestedConfig.getConfigInfo()) { (_, new) in new }
+        } else {
+            config["responseConfigType"] = String(describing: type(of: responseConfig))
+        }
+        
+        return config
+    }
+    
     // MARK: - Private Implementation Methods
-    
-    /// 判断响应是否成功
-    /// - Parameters:
-    ///   - code: 响应中的状态码
-    ///   - json: 响应的JSON数据
-    /// - Returns: 是否成功
-    private func isSuccessResponse(code: Int, json: JSON) -> Bool {
-        return code == successCode
-    }
-    
-    /// 从JSON中提取成功数据
-    /// - Parameters:
-    ///   - json: 响应的JSON数据
-    ///   - data: 原始响应数据
-    /// - Returns: 提取的数据结果
-    private func extractDataFromJSON(_ json: JSON, originalData data: Data) -> Result<Data, Error> {
-        let targetData = json[successDataKey]
-        
-        // 如果不存在或者是 null，直接返回原始 data
-        if !targetData.exists() || targetData.type == .null {
-            return .success(data)
-        }
-        
-        do {
-            let validData: Data
-            
-            switch targetData.type {
-            case .dictionary, .array:
-                validData = try targetData.rawData()
-                
-            case .string:
-                validData = Data(targetData.stringValue.utf8)
-                
-            case .number, .bool:
-                let stringValue = targetData.stringValue
-                validData = Data(stringValue.utf8)
-                
-            default:
-                return .success(data)
-            }
-            
-            return .success(validData)
-        } catch {
-            return .failure(makeError(
-                domain: "DataError",
-                code: -1004,
-                message: "数据转换失败",
-                underlyingError: error
-            ))
-        }
-    }
     
     /// 处理完整响应数据
     /// - Parameters:
@@ -251,10 +456,10 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
             let json = try JSON(data: data)
             
             // 获取业务状态码
-            let code = json["code"].intValue
+            let code = json[responseConfig.codeKey].intValue
             
             // 判断响应是否成功
-            if !isResponseSuccess(code: code, json: json) {
+            if !isResponseSuccess(json: json) {
                 // 走业务错误处理
                 return handleCustomError(
                     code: code,
@@ -268,8 +473,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
             }
             
         } catch {
-            // JSON解析失败
-            let parsingError = handleJSONError(error, statusCode: statusCode)
+            // JSON解析失败 - 增强错误信息
+            let parsingError = handleJSONError(error, statusCode: statusCode, originalData: data)
             return .failure(parsingError)
         }
     }
@@ -294,10 +499,10 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
             let json = try JSON(data: data)
             
             // 获取业务状态码
-            let code = json["code"].intValue
+            let code = json[responseConfig.codeKey].intValue
             
             // 判断响应是否成功
-            if !isResponseSuccess(code: code, json: json) {
+            if !isResponseSuccess(json: json) {
                 // 走业务错误处理
                 return handleCustomError(
                     code: code,
@@ -311,8 +516,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
             }
             
         } catch {
-            // JSON解析失败
-            let parsingError = handleJSONError(error, statusCode: statusCode)
+            // JSON解析失败 - 增强错误信息
+            let parsingError = handleJSONError(error, statusCode: statusCode, originalData: data)
             return .failure(parsingError)
         }
     }
@@ -331,13 +536,17 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         isCompleteResponse: Bool
     ) -> Result<Data, Error> {
         let json = try? JSON(data: jsonData)
-        let message = json?["msg"].string ?? "请求失败"
+        let message = json?[responseConfig.messageKey].string ?? "拦截器未获取到失败原因"
         
         var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
             "statusCode": httpResponse.statusCode,
-            "responseCode": code
+            "responseCode": code,
+            "interceptorConfig": getInterceptorConfig()
         ]
+        
+        // 始终包含原始响应数据，以便调试
+        userInfo["originalData"] = jsonData
         
         if isCompleteResponse {
             userInfo["responseData"] = jsonData
@@ -353,48 +562,37 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
     // MARK: - Error Handling
     /// **错误处理**
     private func handleAFError(_ error: AFError) -> Error {
+        var userInfo: [String: Any] = [
+            "interceptorConfig": getInterceptorConfig()
+        ]
+        
         switch error {
         case .sessionTaskFailed(let underlyingError as URLError):
             return handleURLError(underlyingError)
             
         case .responseSerializationFailed:
-            return makeError(
-                domain: "SerializationError",
-                code: -1002,
-                message: "数据解析失败",
-                underlyingError: error
-            )
+            userInfo[NSLocalizedDescriptionKey] = "数据解析失败"
+            userInfo[NSUnderlyingErrorKey] = error
+            return NSError(domain: "SerializationError", code: -1002, userInfo: userInfo)
             
         case .responseValidationFailed:
-            return makeError(
-                domain: "ValidationError",
-                code: -1003,
-                message: "响应验证失败",
-                underlyingError: error
-            )
+            userInfo[NSLocalizedDescriptionKey] = "响应验证失败"
+            userInfo[NSUnderlyingErrorKey] = error
+            return NSError(domain: "ValidationError", code: -1003, userInfo: userInfo)
             
         case .requestAdaptationFailed(let error):
-            return makeError(
-                domain: "RequestError",
-                code: -1005,
-                message: "请求适配失败",
-                underlyingError: error
-            )
+            userInfo[NSLocalizedDescriptionKey] = "请求适配失败"
+            userInfo[NSUnderlyingErrorKey] = error
+            return NSError(domain: "RequestError", code: -1005, userInfo: userInfo)
             
         case .explicitlyCancelled:
-            return makeError(
-                domain: "CancellationError",
-                code: -1006,
-                message: "请求已取消"
-            )
+            userInfo[NSLocalizedDescriptionKey] = "请求已取消"
+            return NSError(domain: "CancellationError", code: -1006, userInfo: userInfo)
             
         default:
-            return makeError(
-                domain: "NetworkError",
-                code: -1000,
-                message: error.localizedDescription,
-                underlyingError: error
-            )
+            userInfo[NSLocalizedDescriptionKey] = error.localizedDescription
+            userInfo[NSUnderlyingErrorKey] = error
+            return NSError(domain: "NetworkError", code: -1000, userInfo: userInfo)
         }
     }
     
@@ -408,25 +606,51 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         default: (error.localizedDescription, error.errorCode)
         }
         
-        return makeError(
-            domain: "URLError",
-            code: code,
-            message: message,
-            underlyingError: error
-        )
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: message,
+            NSUnderlyingErrorKey: error,
+            "interceptorConfig": getInterceptorConfig()
+        ]
+        
+        return NSError(domain: "URLError", code: code, userInfo: userInfo)
     }
     
     private func handleHTTPStatusCode(_ statusCode: Int) -> Error? {
+        guard statusCode < 200 || statusCode >= 300 else { return nil }
+        
+        var message: String
+        var domain: String
+        
         switch statusCode {
-        case 200..<300: return nil
-        case 400: return makeError(domain: "ClientError", code: 400, message: "请求参数错误")
-        case 401: return makeError(domain: "AuthError", code: 401, message: "身份验证失败")
-        case 403: return makeError(domain: "AuthError", code: 403, message: "访问被拒绝")
-        case 404: return makeError(domain: "ClientError", code: 404, message: "资源未找到")
-        case 405: return makeError(domain: "ClientError", code: 405, message: "方法不被允许")
-        case 500..<600: return makeError(domain: "ServerError", code: statusCode, message: "服务器错误")
-        default: return makeError(domain: "HTTPError", code: statusCode, message: "未知HTTP错误")
+        case 400:
+            message = "请求参数错误"
+            domain = "ClientError"
+        case 401:
+            message = "身份验证失败"
+            domain = "AuthError"
+        case 403:
+            message = "访问被拒绝"
+            domain = "AuthError"
+        case 404:
+            message = "资源未找到"
+            domain = "ClientError"
+        case 405:
+            message = "方法不被允许"
+            domain = "ClientError"
+        case 500..<600:
+            message = "服务器错误"
+            domain = "ServerError"
+        default:
+            message = "未知HTTP错误"
+            domain = "HTTPError"
         }
+        
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: message,
+            "interceptorConfig": getInterceptorConfig()
+        ]
+        
+        return NSError(domain: domain, code: statusCode, userInfo: userInfo)
     }
     
     // MARK: - Utilities
@@ -436,8 +660,14 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         message: String,
         underlyingError: Error? = nil
     ) -> NSError {
-        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
-        userInfo[NSUnderlyingErrorKey] = underlyingError
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: message,
+            "interceptorConfig": getInterceptorConfig()
+        ]
+        
+        if let underlyingError = underlyingError {
+            userInfo[NSUnderlyingErrorKey] = underlyingError
+        }
         
         if let afError = underlyingError as? AFError {
             userInfo["AFErrorDescription"] = afError.errorDescription
@@ -446,13 +676,24 @@ open class DefaultInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
         return NSError(domain: domain, code: code, userInfo: userInfo)
     }
     
-    private func handleJSONError(_ error: Error, statusCode: Int) -> Error {
-        makeError(
-            domain: "DataError",
-            code: statusCode,
-            message: "JSON解析失败: \(error.localizedDescription)",
-            underlyingError: error
-        )
+    private func handleJSONError(_ error: Error, statusCode: Int, originalData: Data? = nil) -> Error {
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: "JSON解析失败: \(error.localizedDescription)",
+            NSUnderlyingErrorKey: error,
+            "interceptorConfig": getInterceptorConfig()
+        ]
+        
+        // 添加原始数据以便调试
+        if let originalData = originalData {
+            userInfo["originalData"] = originalData
+            
+            // 尝试将原始数据转换为字符串，以便更好地调试
+            if let dataString = String(data: originalData, encoding: .utf8) {
+                userInfo["originalDataString"] = dataString
+            }
+        }
+        
+        return NSError(domain: "DataError", code: statusCode, userInfo: userInfo)
     }
 }
 
