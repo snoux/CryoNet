@@ -42,31 +42,24 @@ public final class CryoNet {
     private static var configuration = CryoNetConfiguration()
     
     /// Token管理器
-    private var tokenManager: TokenManagerProtocol
+    private static var tokenManager: TokenManagerProtocol = DefaultTokenManager()
     
     /// 请求拦截器
-    private var interceptor: RequestInterceptorProtocol
+    private static var interceptor: RequestInterceptorProtocol = DefaultInterceptor()
     
     /// 单例实例
     private static var instance: CryoNet?
 
     // MARK: - 初始化方法
     
-    /// 私有初始化方法
+    /// 私有初始化方法 - 修复：移除默认参数，使用当前设置的值
     /// - Parameters:
     ///   - url: 基础URL，如果提供则会更新配置
-    ///   - tokenManager: Token管理器，默认使用DefaultTokenManager
-    ///   - interceptor: 请求拦截器，默认使用DefaultInterceptor
-    private init(
-        _ url: String?,
-        tokenManager: TokenManagerProtocol = DefaultTokenManager(),
-        interceptor: RequestInterceptorProtocol = DefaultInterceptor()
-    ) {
+    fileprivate init(_ url: String?) {
         if let url = url, !url.isEmpty {
             CryoNet.configuration.basicURL = url
         }
-        self.tokenManager = tokenManager
-        self.interceptor = interceptor
+        // 不再重新设置 tokenManager 和 interceptor，保持当前值
     }
 
     // MARK: - 配置管理
@@ -74,13 +67,13 @@ public final class CryoNet {
     /// 获取当前配置
     /// - Returns: 当前CryoNet配置
     public static func getConfiguration() -> CryoNetConfiguration {
-        return configuration
+        return CryoNet.configuration
     }
     
     /// 设置新的配置
     /// - Parameter config: 新的配置对象
     public static func setConfiguration(_ config: CryoNetConfiguration) {
-        configuration = config
+        self.configuration = config
     }
     
     /// 更新部分配置
@@ -93,7 +86,7 @@ public final class CryoNet {
     
     /// 设置基础URL
     /// - Parameter url: 基础URL字符串
-    public static func setBasicURL(_ url: String) {
+    public static  func setBasicURL(_ url: String) {
         configuration.basicURL = url
     }
     
@@ -114,6 +107,14 @@ public final class CryoNet {
     public static func setDefaultTimeout(_ timeout: TimeInterval) {
         configuration.defaultTimeout = timeout
     }
+    
+    /// 设置默认默认最大并发下载数
+    /// - Parameter timeout: 默认最大并发下载数
+    public static func setDefaultMaxConcurrentDownloads(
+        _ maxConcurrentDownloads: Int
+    ) {
+        configuration.maxConcurrentDownloads = maxConcurrentDownloads
+    }
 
     // MARK: - 单例调用
     
@@ -125,21 +126,49 @@ public final class CryoNet {
             instance = CryoNet(url)
         } else if let url = url, !url.isEmpty {
             // 如果实例已存在但提供了新的URL，则更新配置
-            configuration.basicURL = url
+            CryoNet.configuration.basicURL = url
         }
         return instance!
     }
 
     /// 设置Token管理器
     /// - Parameter tokenManager: 新的Token管理器
-    public func setTokenManager(_ tokenManager: TokenManagerProtocol) {
-        self.tokenManager = tokenManager
+    public static func setTokenManager(_ tokenManager: TokenManagerProtocol) {
+        CryoNet.tokenManager = tokenManager
     }
 
     /// 设置请求拦截器
     /// - Parameter interceptor: 新的请求拦截器
-    public func setInterceptor(_ interceptor: RequestInterceptorProtocol) {
-        self.interceptor = interceptor
+    public static func setInterceptor(_ interceptor: RequestInterceptorProtocol) {
+        CryoNet.interceptor = interceptor
+    }
+    
+    // MARK: - 配置验证和调试
+    
+    /// 验证当前拦截器配置
+    /// - Returns: 配置验证结果
+    public static func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
+        let currentInterceptor = CryoNet.interceptor
+        let interceptorType = String(describing: type(of: currentInterceptor))
+        
+        if interceptorType.contains("DefaultInterceptor") {
+            return (false, "当前使用默认拦截器，可能配置未生效")
+        } else {
+            return (true, "当前使用自定义拦截器: \(interceptorType)")
+        }
+    }
+    
+    /// 获取当前拦截器信息
+    /// - Returns: 拦截器信息
+    public static func getCurrentInterceptorInfo() -> String {
+        let interceptorType = String(describing: type(of: CryoNet.interceptor))
+        let tokenManagerType = String(describing: type(of: CryoNet.tokenManager))
+        
+        return """
+        当前拦截器类型: \(interceptorType)
+        当前Token管理器类型: \(tokenManagerType)
+        实例是否已创建: \(instance != nil)
+        """
     }
 }
 
@@ -242,8 +271,11 @@ public extension CryoNet {
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
-        let userInterceptor = interceptor ?? self.interceptor
-        let adapter = InterceptorAdapter(interceptor: userInterceptor, tokenManager: tokenManager)
+        let userInterceptor = interceptor ?? CryoNet.interceptor
+        let adapter = InterceptorAdapter(
+            interceptor: userInterceptor,
+            tokenManager: CryoNet.tokenManager
+        )
 
         let request = uploadFile(
             model,
@@ -271,8 +303,11 @@ public extension CryoNet {
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
         let mergedHeaders = mergeHeaders(headers)
-        let userInterceptor = interceptor ?? self.interceptor
-        let adapter = InterceptorAdapter(interceptor: userInterceptor, tokenManager: tokenManager)
+        let userInterceptor = interceptor ?? CryoNet.interceptor
+        let adapter = InterceptorAdapter(
+            interceptor: userInterceptor,
+            tokenManager: CryoNet.tokenManager
+        )
 
         let request = AF.request(
             model.appendURL,
@@ -299,7 +334,9 @@ public extension CryoNet {
     ) {
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = CryoNet.configuration.maxConcurrentDownloads
-        let semaphore = DispatchSemaphore(value: CryoNet.configuration.maxConcurrentDownloads)
+        let semaphore = DispatchSemaphore(
+            value: CryoNet.configuration.maxConcurrentDownloads
+        )
 
         for item in model.models {
             guard item.fileURL != nil else { continue }
