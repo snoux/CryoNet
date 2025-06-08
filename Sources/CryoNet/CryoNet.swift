@@ -39,7 +39,7 @@ public final class CryoNet {
     // MARK: - 属性
     
     /// 全局配置
-    private static var configuration = CryoNetConfiguration()
+    private var configuration = CryoNetConfiguration()
     
     /// Token管理器
     private static var tokenManager: TokenManagerProtocol = DefaultTokenManager()
@@ -57,7 +57,7 @@ public final class CryoNet {
     ///   - url: 基础URL，如果提供则会更新配置
     fileprivate init(_ url: String?) {
         if let url = url, !url.isEmpty {
-            CryoNet.configuration.basicURL = url
+            configuration.basicURL = url
         }
         // 不再重新设置 tokenManager 和 interceptor，保持当前值
     }
@@ -67,45 +67,45 @@ public final class CryoNet {
     /// 获取当前配置
     /// - Returns: 当前CryoNet配置
     public static func getConfiguration() -> CryoNetConfiguration {
-        return CryoNet.configuration
+        return CryoNet.sharedInstance().configuration
     }
     
     /// 设置新的配置
     /// - Parameter config: 新的配置对象
-    public static func setConfiguration(_ config: CryoNetConfiguration) {
+    public func setConfiguration(_ config: CryoNetConfiguration) {
         self.configuration = config
     }
     
     /// 更新部分配置
     /// - Parameter update: 配置更新闭包
     public static func updateConfiguration(_ update: (inout CryoNetConfiguration) -> Void) {
-        var config = configuration
+        var config = CryoNet.sharedInstance().configuration
         update(&config)
-        configuration = config
+        CryoNet.sharedInstance().configuration = config
     }
     
     /// 设置基础URL
     /// - Parameter url: 基础URL字符串
-    public static  func setBasicURL(_ url: String) {
-        configuration.basicURL = url
+    public static func setBasicURL(_ url: String) {
+        CryoNet.sharedInstance().configuration.basicURL = url
     }
     
     /// 设置基础请求头
     /// - Parameter headers: HTTP请求头数组
     public static func setBasicHeaders(_ headers: [HTTPHeader]) {
-        configuration.basicHeaders = headers
+        CryoNet.sharedInstance().configuration.basicHeaders = headers
     }
     
     /// 添加基础请求头
     /// - Parameter header: 要添加的HTTP请求头
     public static func addBasicHeader(_ header: HTTPHeader) {
-        configuration.basicHeaders.append(header)
+        CryoNet.sharedInstance().configuration.basicHeaders.append(header)
     }
     
     /// 设置默认超时时间
     /// - Parameter timeout: 超时时间（秒）
     public static func setDefaultTimeout(_ timeout: TimeInterval) {
-        configuration.defaultTimeout = timeout
+        CryoNet.sharedInstance().configuration.defaultTimeout = timeout
     }
     
     /// 设置默认默认最大并发下载数
@@ -113,7 +113,7 @@ public final class CryoNet {
     public static func setDefaultMaxConcurrentDownloads(
         _ maxConcurrentDownloads: Int
     ) {
-        configuration.maxConcurrentDownloads = maxConcurrentDownloads
+        CryoNet.sharedInstance().configuration.maxConcurrentDownloads = maxConcurrentDownloads
     }
 
     // MARK: - 单例调用
@@ -126,7 +126,7 @@ public final class CryoNet {
             instance = CryoNet(url)
         } else if let url = url, !url.isEmpty {
             // 如果实例已存在但提供了新的URL，则更新配置
-            CryoNet.configuration.basicURL = url
+            CryoNet.sharedInstance().configuration.basicURL = url
         }
         return instance!
     }
@@ -246,7 +246,7 @@ private extension CryoNet {
     /// - Parameter headers: 请求特定的HTTP请求头
     /// - Returns: 合并后的HTTP请求头
     func mergeHeaders(_ headers: [HTTPHeader]) -> HTTPHeaders {
-        let allHeaders = CryoNet.configuration.basicHeaders + headers
+        let allHeaders = CryoNet.sharedInstance().configuration.basicHeaders + headers
         return HTTPHeaders(allHeaders)
     }
 }
@@ -333,9 +333,9 @@ public extension CryoNet {
         result: @escaping (DownloadResult) -> Void = { _ in }
     ) {
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = CryoNet.configuration.maxConcurrentDownloads
+        queue.maxConcurrentOperationCount = CryoNet.sharedInstance().configuration.maxConcurrentDownloads
         let semaphore = DispatchSemaphore(
-            value: CryoNet.configuration.maxConcurrentDownloads
+            value: CryoNet.sharedInstance().configuration.maxConcurrentDownloads
         )
 
         for item in model.models {
