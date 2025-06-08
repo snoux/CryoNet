@@ -27,6 +27,8 @@ dependencies: [
     .package(url: "https://github.com/snow-xf/CryoNet.git")
 ]
 ```
+> 由于还处于开发阶段，会随时提交新代码，如要使用导入时请选择main分支,主体结构已确定，不影响后续使用!!
+
 
 然后在需要使用的文件中导入：
 
@@ -43,7 +45,6 @@ import CryoNet
 let request = CryoNet.sharedInstance("https://api.example.com")
 ```
 
-> 由于还处于开发阶段，会随时提交新代码，如要使用导入时请选择main分支!!
 
 ### 发送 GET 请求
 
