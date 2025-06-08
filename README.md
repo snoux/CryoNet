@@ -2,10 +2,7 @@
 
 CryoNet 是一个基于 Alamofire 和 SwiftyJSON 的轻量级网络请求框架，专为 Swift 项目设计。它提供了简洁易用的 API，支持多种数据解析方式，并具有强大的错误处理和拦截器功能。**（开发测试中）**
 
-原项目是本人为方便维护整理项目中的请求而进行封装的私有库，原名为`XFRequest`，它现在依旧在我的私有库存放。`CryoNet`在此基础上进行了优化
-
-`XFRequest`中我写了一个工具类专门用来处理数据，本框架中我将其进行了删除，统一调整使用`SwiftyJSON`来处理数据。
-
+原项目是本人为方便维护整理项目中的请求而进行封装的私有库，`CryoNet`在此基础上进行了优化
 
 
 ## 特性
@@ -45,6 +42,8 @@ import CryoNet
 // 设置基础 URL
 let request = CryoNet.sharedInstance("https://api.example.com")
 ```
+
+> 由于还处于开发阶段，会随时提交新代码，如要使用导入时请选择main分支!!
 
 ### 发送 GET 请求
 
