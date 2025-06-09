@@ -372,8 +372,6 @@ extension CryoResult {
     
     /// 异步从拦截器获取 SwiftyJSON 对象并转换为模型
     public func interceptJSONModelAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
-        let originalData = try? await request.serializingData().value
-
         return try await withCheckedThrowingContinuation { continuation in
             interceptJSONModel(type: type, keyPath: keyPath) { model in
                 continuation.resume(returning: model)
@@ -385,8 +383,6 @@ extension CryoResult {
     
     /// 异步从拦截器获取 SwiftyJSON 对象并使用自定义解析闭包转换为模型
     public func interceptJSONModelAsync<T>(parser: @escaping (JSON) -> T?) async throws -> T {
-        let originalData = try? await request.serializingData().value
-
         return try await withCheckedThrowingContinuation { continuation in
             interceptJSONModel(parser: parser) { model in
                 continuation.resume(returning: model)
