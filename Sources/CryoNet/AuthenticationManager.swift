@@ -26,16 +26,16 @@ public protocol ResponseStructureConfig: Sendable {
 
 // MARK: - 默认响应结构配置
 /// 默认响应结构配置
-open class DefaultResponseStructure: ResponseStructureConfig {
+open  class DefaultResponseStructure: ResponseStructureConfig,@unchecked Sendable{
     
     // 请求状态码key值
-    open var codeKey: String
+    public let codeKey: String
     // 返回说明
-    open var messageKey: String
+    public let messageKey: String
     // 请求结果Key值
-    open var dataKey: String
+    public let dataKey: String
     // 成功状态
-    open var successCode: Int
+    public let successCode: Int
     
     public init(
         codeKey: String = "code",
@@ -606,7 +606,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         default: (error.localizedDescription, error.errorCode)
         }
         
-        var userInfo: [String: Any] = [
+        let userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
             NSUnderlyingErrorKey: error,
             "interceptorConfig": getInterceptorConfig()
@@ -645,7 +645,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             domain = "HTTPError"
         }
         
-        var userInfo: [String: Any] = [
+        let userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
             "interceptorConfig": getInterceptorConfig()
         ]
