@@ -48,64 +48,59 @@ public final class CryoNet {
     
     // MARK: - 属性
     
-    /// 全局配置
-    private var configuration: CryoNetConfiguration
+    /// 实例配置
+    private let queue = DispatchQueue(label: "com.cryonet.config.queue", attributes: .concurrent)
+    private var _configuration: CryoNetConfiguration
+    public var configuration: CryoNetConfiguration {
+        queue.sync { _configuration }
+    }
     
-    /// 单例实例
-    private static var _defaultInstance: CryoNet? // 使用 _defaultInstance 避免与 sharedInstance 混淆
-
     // MARK: - 初始化方法
     
-    /// 私有初始化方法，允许外部注入配置
+    /// 初始化方法，允许外部注入配置
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
-        self.configuration = configuration
+        self._configuration = configuration
+    }
+    
+    /// 闭包配置初始化方法
+    /// - Parameter configurator: 配置闭包，用于自定义配置
+    public convenience init(configurator: (inout CryoNetConfiguration) -> Void) {
+        var configuration = CryoNetConfiguration()
+        configurator(&configuration)
+        self.init(configuration: configuration)
     }
 
     // MARK: - 配置管理
     
     /// 获取当前配置
     /// - Returns: 当前CryoNet配置
-    public static func getConfiguration() -> CryoNetConfiguration {
-        return CryoNet.sharedInstance().configuration
+    public func getConfiguration() -> CryoNetConfiguration {
+        configuration
     }
     
     /// 设置新的配置
     /// - Parameter config: 新的配置对象
-    public static func setConfiguration(_ config: CryoNetConfiguration) {
-        CryoNet.sharedInstance().configuration = config
+    public func setConfiguration(_ config: CryoNetConfiguration) {
+        queue.async(flags: .barrier) {
+            self._configuration = config
+        }
     }
     
     /// 更新部分配置
-    /// - Parameter update: 配置更新闭包
-    public static func updateConfiguration(_ update: (inout CryoNetConfiguration) -> Void) {
-        update(&CryoNet.sharedInstance().configuration)
-    }
-    
-    // MARK: - 单例调用
-    
-    /// 获取CryoNet共享实例
-    /// - Parameter config: 可选的配置闭包，用于直接配置CryoNetConfiguration
-    /// - Returns: CryoNet实例
-    public static func sharedInstance(
-        config: ((inout CryoNetConfiguration) -> Void)? = nil
-    ) -> CryoNet {
-        if _defaultInstance == nil {
-            _defaultInstance = CryoNet(configuration: CryoNetConfiguration())
+    /// - Parameter update: 配置更新闭包（需要标记为 @escaping）
+    public func updateConfiguration(_ update: @escaping (inout CryoNetConfiguration) -> Void) {
+        queue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            update(&self._configuration)
         }
-        
-        if let config = config {
-            config(&_defaultInstance!.configuration)
-        }
-        
-        return _defaultInstance!
     }
-
     
     // MARK: - 配置验证和调试
+    
     /// 验证当前拦截器配置
     /// - Returns: 配置验证结果
-    public static func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
-        let currentInterceptor = CryoNet.sharedInstance().configuration.interceptor
+    public func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
+        let currentInterceptor = configuration.interceptor
         let interceptorType = String(describing: type(of: currentInterceptor))
         
         if interceptorType.contains("DefaultInterceptor") {
@@ -117,14 +112,13 @@ public final class CryoNet {
     
     /// 获取当前拦截器信息
     /// - Returns: 拦截器信息
-    public static func getCurrentInterceptorInfo() -> String {
-        let interceptorType = String(describing: type(of: CryoNet.sharedInstance().configuration.interceptor))
-        let tokenManagerType = String(describing: type(of: CryoNet.sharedInstance().configuration.tokenManager))
+    public func getCurrentInterceptorInfo() -> String {
+        let interceptorType = String(describing: type(of: configuration.interceptor))
+        let tokenManagerType = String(describing: type(of: configuration.tokenManager))
         
         return """
         当前拦截器类型: \(interceptorType)
         当前Token管理器类型: \(tokenManagerType)
-        实例是否已创建: \(_defaultInstance != nil)
         """
     }
 }
@@ -148,6 +142,7 @@ private extension CryoNet {
         headers: [HTTPHeader],
         interceptor: (any RequestInterceptor)? = nil
     ) -> DataRequest {
+        let fullURL = model.fullURL(with: configuration.basicURL)
 
         return AF.upload(
             multipartFormData: { multipart in
@@ -170,7 +165,7 @@ private extension CryoNet {
                     }
                 }
             },
-            to: model.appendURL,
+            to: fullURL,
             method: model.method,
             headers: mergeHeaders(headers),
             interceptor: interceptor
@@ -228,10 +223,11 @@ public extension CryoNet {
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
-        let userInterceptor = interceptor ?? self.configuration.interceptor
+        let config = self.configuration
+        let userInterceptor = interceptor ?? config.interceptor
         let adapter = InterceptorAdapter(
             interceptor: userInterceptor,
-            tokenManager: self.configuration.tokenManager
+            tokenManager: config.tokenManager
         )
 
         let request = uploadFile(
@@ -259,15 +255,17 @@ public extension CryoNet {
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
+        let config = self.configuration
+        let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers)
-        let userInterceptor = interceptor ?? self.configuration.interceptor
+        let userInterceptor = interceptor ?? config.interceptor
         let adapter = InterceptorAdapter(
             interceptor: userInterceptor,
-            tokenManager: self.configuration.tokenManager
+            tokenManager: config.tokenManager
         )
 
         let request = AF.request(
-            model.appendURL,
+            fullURL,
             method: model.method,
             parameters: parameters,
             encoding: model.encoding.getEncoding(),
@@ -289,11 +287,10 @@ public extension CryoNet {
         progress: @escaping (DownloadItem) -> Void,
         result: @escaping (DownloadResult) -> Void = { _ in }
     ) {
+        let maxConcurrent = configuration.maxConcurrentDownloads
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = self.configuration.maxConcurrentDownloads
-        let semaphore = DispatchSemaphore(
-            value: self.configuration.maxConcurrentDownloads
-        )
+        queue.maxConcurrentOperationCount = maxConcurrent
+        let semaphore = DispatchSemaphore(value: maxConcurrent)
 
         for item in model.models {
             guard item.fileURL != nil else { continue }
@@ -326,5 +323,3 @@ public extension CryoNet {
         }
     }
 }
-
-
