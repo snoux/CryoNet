@@ -16,8 +16,6 @@ final class CryoNetTests: XCTestCase {
         // 清理工作
     }
     
-    
-    
     // MARK: - 闭包配置初始化测试
     func testClosureInitialization() {
         // 使用闭包配置初始化
@@ -174,10 +172,8 @@ final class CryoNetTests: XCTestCase {
             return ["type": "MockInterceptor"]
         }
     }
-}
     
     // MARK: - 基础功能测试
-    
     func testInitializationWithDefaultConfiguration() {
         let cryoNet = CryoNet()
         let config = cryoNet.configuration
@@ -501,4 +497,5 @@ final class CryoNetTests: XCTestCase {
             return ["type": "MockInterceptor"]
         }
     }
+    
 }
