@@ -157,39 +157,50 @@ public struct DownloadModel {
     }
 }
 
-@available(iOS 13 ,*)
-public class DownloadItem: Identifiable, Equatable {
-    static public func == (lhs: DownloadItem, rhs: DownloadItem) -> Bool {
+@available(iOS 13, *)
+public actor DownloadItem: Identifiable, Equatable, @unchecked Sendable {
+    public static func == (lhs: DownloadItem, rhs: DownloadItem) -> Bool {
         lhs.id == rhs.id
     }
-    
+
     public let id = UUID().uuidString
-    
-    /// 文件名称
-    public var fileName: String = ""
-    
-    /// 文件下载路径
-    public var filePath: String = ""
-    
-    /// 文件下载URL
-    public var fileURL: URL? {
-        URL(string: filePath)
-    }
-    
-    /// 文件预览URL
-    public var previewPath: String = ""
-    
-    /// 进度
-    public var progress: Double = 0.0
-    
-    public init() {}
-    
+
+    private var _fileName: String = ""
+    private var _filePath: String = ""
+    private var _previewPath: String = ""
+    private var _progress: Double = 0.0
+
     public init(fileName: String?, filePath: String, previewPath: String?) {
-        self.fileName = fileName ?? ""
-        self.filePath = filePath
-        self.previewPath = previewPath ?? ""
+        self._fileName = fileName ?? ""
+        self._filePath = filePath
+        self._previewPath = previewPath ?? ""
+    }
+
+    public init() {}
+
+    public func setProgress(_ value: Double) {
+        _progress = value
+    }
+
+    public func getProgress() -> Double {
+        _progress
+    }
+
+    public func getFileName() -> String {
+        _fileName
+    }
+
+    public func getFilePath() -> String {
+        _filePath
+    }
+
+    public func fileURL() -> URL? {
+        URL(string: _filePath)
     }
 }
+
+
+
 
 @available(iOS 13 ,*)
 /// 下载结果
