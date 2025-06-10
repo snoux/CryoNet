@@ -237,31 +237,48 @@ public protocol TokenManagerProtocol: Sendable {
     func refreshToken() async -> String?
 }
 
-/// Token 管理 actor(允许继承)
-public actor DefaultTokenManager: TokenManagerProtocol {
-    /// 令牌存储
+
+// MARK: - 封装 token 状态的线程安全 actor
+actor TokenStorageActor {
     private var token: String?
-    
-    /// 获取当前的 Token
-    public func getToken() async -> String? {
-        return token
+
+    func get() -> String? {
+        token
     }
-    
-    /// 设置新的 Token
-    public func setToken(_ newToken: String) async {
+
+    func set(_ newToken: String?) {
         token = newToken
     }
-    
-    /// 刷新 Token
-    public func refreshToken() async -> String? {
-        // 默认实现：子类应当提供具体的刷新逻辑
-        return nil
-    }
-    
+}
+
+// MARK: - 可继承、线程安全的默认实现
+open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
+    private let storage = TokenStorageActor()
+
     public init(token: String? = nil) {
-        self.token = token
+        if let token = token {
+            Task { await storage.set(token) }
+        }
+    }
+
+    /// 获取当前的 Token
+    open func getToken() async -> String? {
+        await storage.get()
+    }
+
+    /// 设置新的 Token
+    open func setToken(_ newToken: String) async {
+        await storage.set(newToken)
+    }
+
+    /// 刷新 Token（应由子类实现）
+    open func refreshToken() async -> String? {
+        return nil // 默认返回 nil，子类应重写
     }
 }
+
+
+
 
 // MARK: - 拦截器协议与默认实现
 /// 拦截器协议,继承该协议自己实现,也可继承自DefaultInterceptor重写方法
