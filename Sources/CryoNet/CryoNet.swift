@@ -5,7 +5,7 @@ import SwiftyJSON
 
 /// CryoNet配置对象
 @available(macOS 10.15, iOS 13, *)
-public struct CryoNetConfiguration {
+public struct CryoNetConfiguration: Sendable {
     /// 基础URL，用于与请求路径拼接
     public var basicURL: String
     
@@ -44,27 +44,46 @@ public struct CryoNetConfiguration {
 
 /// CryoNet 网络请求核心封装类
 @available(macOS 10.15, iOS 13, *)
-public final class CryoNet {
+public actor CryoNet: Sendable {
     
     // MARK: - 属性
-    
     /// 实例配置
-    private let queue = DispatchQueue(label: "com.cryonet.config.queue", attributes: .concurrent)
-    private var _configuration: CryoNetConfiguration
-    public var configuration: CryoNetConfiguration {
-        queue.sync { _configuration }
+    private var configurationActor: ConfigurationActor
+    private struct ConfigurationActor: Sendable {
+        private var _configuration: CryoNetConfiguration
+        private let queue = DispatchQueue(label: "com.cryonet.config.queue", attributes: .concurrent)
+        
+        init(configuration: CryoNetConfiguration) {
+            self._configuration = configuration
+        }
+        
+        func getConfiguration() -> CryoNetConfiguration {
+            queue.sync { _configuration }
+        }
+        
+        mutating func setConfiguration(_ config: CryoNetConfiguration) {
+//            queue.async(flags: .barrier) {
+                self._configuration = config
+//            }
+        }
+        
+        mutating func updateConfiguration(_ update: @escaping (inout CryoNetConfiguration) -> Void) {
+//            queue.async(flags: .barrier) {
+                update(&self._configuration)
+//            }
+        }
     }
     
     // MARK: - 初始化方法
     
     /// 初始化方法，允许外部注入配置
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
-        self._configuration = configuration
+        self.configurationActor = ConfigurationActor(configuration: configuration)
     }
     
     /// 闭包配置初始化方法
     /// - Parameter configurator: 配置闭包，用于自定义配置
-    public convenience init(configurator: (inout CryoNetConfiguration) -> Void) {
+    public init(configurator: (inout CryoNetConfiguration) -> Void) {
         var configuration = CryoNetConfiguration()
         configurator(&configuration)
         self.init(configuration: configuration)
@@ -75,24 +94,21 @@ public final class CryoNet {
     /// 获取当前配置
     /// - Returns: 当前CryoNet配置
     public func getConfiguration() -> CryoNetConfiguration {
-        configuration
+        configurationActor.getConfiguration()
     }
     
     /// 设置新的配置
     /// - Parameter config: 新的配置对象
     public func setConfiguration(_ config: CryoNetConfiguration) {
-        queue.async(flags: .barrier) {
-            self._configuration = config
-        }
+        configurationActor.setConfiguration(config)
     }
     
     /// 更新部分配置
-    /// - Parameter update: 配置更新闭包（需要标记为 @escaping）
-    public func updateConfiguration(_ update: @escaping (inout CryoNetConfiguration) -> Void) {
-        queue.async(flags: .barrier) { [weak self] in
-            guard let self = self else { return }
-            update(&self._configuration)
-        }
+    /// - Parameter update: 配置更新闭包
+    public func updateConfiguration(
+        _ update: @escaping (inout CryoNetConfiguration) -> Void
+    ) {
+        configurationActor.updateConfiguration(update)
     }
     
     // MARK: - 配置验证和调试
@@ -100,7 +116,7 @@ public final class CryoNet {
     /// 验证当前拦截器配置
     /// - Returns: 配置验证结果
     public func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
-        let currentInterceptor = configuration.interceptor
+        let currentInterceptor = configurationActor.getConfiguration().interceptor
         let interceptorType = String(describing: type(of: currentInterceptor))
         
         if interceptorType.contains("DefaultInterceptor") {
@@ -113,8 +129,9 @@ public final class CryoNet {
     /// 获取当前拦截器信息
     /// - Returns: 拦截器信息
     public func getCurrentInterceptorInfo() -> String {
-        let interceptorType = String(describing: type(of: configuration.interceptor))
-        let tokenManagerType = String(describing: type(of: configuration.tokenManager))
+        let config = configurationActor.getConfiguration()
+        let interceptorType = String(describing: type(of: config.interceptor))
+        let tokenManagerType = String(describing: type(of: config.tokenManager))
         
         return """
         当前拦截器类型: \(interceptorType)
@@ -142,7 +159,8 @@ private extension CryoNet {
         headers: [HTTPHeader],
         interceptor: (any RequestInterceptor)? = nil
     ) -> DataRequest {
-        let fullURL = model.fullURL(with: configuration.basicURL)
+        let config = configurationActor.getConfiguration()
+        let fullURL = model.fullURL(with: config.basicURL)
 
         return AF.upload(
             multipartFormData: { multipart in
@@ -198,7 +216,8 @@ private extension CryoNet {
     /// - Parameter headers: 请求特定的HTTP请求头
     /// - Returns: 合并后的HTTP请求头
     func mergeHeaders(_ headers: [HTTPHeader]) -> HTTPHeaders {
-        let allHeaders = self.configuration.basicHeaders + headers
+        let config = configurationActor.getConfiguration()
+        let allHeaders = config.basicHeaders + headers
         return HTTPHeaders(allHeaders)
     }
 }
@@ -223,7 +242,7 @@ public extension CryoNet {
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
-        let config = self.configuration
+        let config = configurationActor.getConfiguration()
         let userInterceptor = interceptor ?? config.interceptor
         let adapter = InterceptorAdapter(
             interceptor: userInterceptor,
@@ -255,7 +274,7 @@ public extension CryoNet {
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
-        let config = self.configuration
+        let config = configurationActor.getConfiguration()
         let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers)
         let userInterceptor = interceptor ?? config.interceptor
@@ -287,7 +306,8 @@ public extension CryoNet {
         progress: @escaping (DownloadItem) -> Void,
         result: @escaping (DownloadResult) -> Void = { _ in }
     ) {
-        let maxConcurrent = configuration.maxConcurrentDownloads
+        let config = configurationActor.getConfiguration()
+        let maxConcurrent = config.maxConcurrentDownloads
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = maxConcurrent
         let semaphore = DispatchSemaphore(value: maxConcurrent)
