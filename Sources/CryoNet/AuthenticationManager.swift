@@ -232,9 +232,9 @@ public extension ResponseStructureConfig {
 // MARK: - Token 管理协议与默认实现
 /// Token 管理协议,继承该协议自己实现,也可继承自DefaultTokenManager重写方法
 public protocol TokenManagerProtocol: Sendable {
-    func getToken() -> String?
-    func setToken(_ newToken: String)
-    func refreshToken() -> String?
+    func getToken() async -> String?
+    func setToken(_ newToken: String) async
+    func refreshToken() async -> String?
 }
 
 
@@ -258,26 +258,34 @@ open class DefaultTokenManager: TokenManagerProtocol,@unchecked Sendable {
     private let queue = DispatchQueue(label: "com.token.manager.queue", attributes: .concurrent)
     
     /// 获取当前的 Token
-    public func getToken() -> String? {
-        return queue.sync { token }
+    public func getToken() async -> String? {
+        return await withCheckedContinuation { continuation in
+            queue.sync { // 使用 sync 确保在当前线程同步获取 token
+                continuation.resume(returning: token)
+            }
+        }
     }
     
     /// 设置新的 Token
-    public func setToken(_ newToken: String) {
-        queue.async(flags: .barrier) {
-            self.token = newToken
+    public func setToken(_ newToken: String) async {
+        await withCheckedContinuation { continuation in
+            queue.async(flags: .barrier) {
+                self.token = newToken
+                continuation.resume()
+            }
         }
     }
     
     /// 刷新 Token（子类可重写）
-    open func refreshToken() -> String? {
+    open func refreshToken() async -> String? {
         // 默认实现：子类应当提供具体的刷新逻辑
         return nil
     }
     
     public init(token: String? = nil) {
+        // 初始化时，如果提供了 token，则异步设置
         if let token = token {
-            setToken(token)
+            Task { await setToken(token) }
         }
     }
 }
@@ -313,7 +321,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     
     // MARK: - Request Interception
     open func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest {
-        guard let token = tokenManager.getToken() else { return urlRequest }
+        guard let token = await tokenManager.getToken() else {
+            return urlRequest
+        }
         
         var modifiedRequest = urlRequest
         let authValue = "Bearer \(token)"
@@ -720,7 +730,7 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     func retry(_ request: Request, for session: Session, dueTo error: Error, completion: @escaping (RetryResult) -> Void) {
         Task {
             if let afError = error as? AFError, afError.responseCode == 401 {
-                let newToken = tokenManager.refreshToken()
+                let newToken =  await tokenManager.refreshToken()
                 if newToken != nil {
                     completion(.retry)
                     return
