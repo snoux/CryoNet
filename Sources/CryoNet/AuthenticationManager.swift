@@ -26,7 +26,7 @@ public protocol ResponseStructureConfig: Sendable {
 
 // MARK: - 默认响应结构配置
 /// 默认响应结构配置
-open  class DefaultResponseStructure: ResponseStructureConfig,@unchecked Sendable{
+open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendable {
     
     // 请求状态码key值
     public let codeKey: String
@@ -237,6 +237,31 @@ public protocol TokenManagerProtocol: Sendable {
     func refreshToken() async -> String?
 }
 
+/// Token 管理 actor(允许继承)
+public actor DefaultTokenManager: TokenManagerProtocol {
+    /// 令牌存储
+    private var token: String?
+    
+    /// 获取当前的 Token
+    public func getToken() async -> String? {
+        return token
+    }
+    
+    /// 设置新的 Token
+    public func setToken(_ newToken: String) async {
+        token = newToken
+    }
+    
+    /// 刷新 Token
+    public func refreshToken() async -> String? {
+        // 默认实现：子类应当提供具体的刷新逻辑
+        return nil
+    }
+    
+    public init(token: String? = nil) {
+        self.token = token
+    }
+}
 
 // MARK: - 拦截器协议与默认实现
 /// 拦截器协议,继承该协议自己实现,也可继承自DefaultInterceptor重写方法
@@ -249,50 +274,7 @@ public protocol RequestInterceptorProtocol: Sendable {
     func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
 }
 
-/// Token 管理类
-open class DefaultTokenManager: TokenManagerProtocol,@unchecked Sendable {
-    /// 令牌存储，使用 private 保护，外部无法直接访问
-    private var token: String?
-    
-    
-    private let queue = DispatchQueue(label: "com.token.manager.queue", attributes: .concurrent)
-    
-    /// 获取当前的 Token
-    public func getToken() async -> String? {
-        return await withCheckedContinuation { continuation in
-            queue.sync { // 使用 sync 确保在当前线程同步获取 token
-                continuation.resume(returning: token)
-            }
-        }
-    }
-    
-    /// 设置新的 Token
-    public func setToken(_ newToken: String) async {
-        await withCheckedContinuation { continuation in
-            queue.async(flags: .barrier) {
-                self.token = newToken
-                continuation.resume()
-            }
-        }
-    }
-    
-    /// 刷新 Token（子类可重写）
-    open func refreshToken() async -> String? {
-        // 默认实现：子类应当提供具体的刷新逻辑
-        return nil
-    }
-    
-    public init(token: String? = nil) {
-        // 初始化时，如果提供了 token，则异步设置
-        if let token = token {
-            Task { await setToken(token) }
-        }
-    }
-}
-
-
-// MARK: - 默认拦截器
-/// 默认拦截器,可以继承重写
+/// 默认拦截器(允许继承)
 open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, @unchecked Sendable {
     
     // MARK: - Configuration
@@ -707,7 +689,6 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 }
 
-
 // MARK: - 适配器实现
 class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     private let interceptor: RequestInterceptorProtocol
@@ -730,7 +711,7 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     func retry(_ request: Request, for session: Session, dueTo error: Error, completion: @escaping (RetryResult) -> Void) {
         Task {
             if let afError = error as? AFError, afError.responseCode == 401 {
-                let newToken =  await tokenManager.refreshToken()
+                let newToken = await tokenManager.refreshToken()
                 if newToken != nil {
                     completion(.retry)
                     return
@@ -740,4 +721,3 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
         }
     }
 }
-
