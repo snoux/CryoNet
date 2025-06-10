@@ -303,43 +303,120 @@ public extension CryoNet {
     ///   - result: 下载结果回调
     func downloadFile(
         _ model: DownloadModel,
-        progress: @escaping (DownloadItem) -> Void,
-        result: @escaping (DownloadResult) -> Void = { _ in }
+        progress: @escaping @Sendable (DownloadItem) -> Void,
+        result: @escaping @Sendable (DownloadResult) -> Void = { _ in }
     ) {
         let config = configurationActor.getConfiguration()
         let maxConcurrent = config.maxConcurrentDownloads
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = maxConcurrent
-        let semaphore = DispatchSemaphore(value: maxConcurrent)
 
-        for item in model.models {
-            guard item.fileURL != nil else { continue }
-
-            let operation = BlockOperation {
-                semaphore.wait()
-
-                let destination: DownloadRequest.Destination = { _, _ in
-                    let directory = model.savePathURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-                    return (
-                        directory.appendingPathComponent(item.fileName),
-                        [.removePreviousFile, .createIntermediateDirectories]
-                    )
-                }
-
-                AF.download(item.filePath, to: destination)
-                    .validate()
-                    .downloadProgress {
-                        item.progress = $0.fractionCompleted
-                        progress(item)
-                    }
-                    .response {
-                        response in
-                        result(DownloadResult(result: response.result, downLoadItem: item))
-                        semaphore.signal()
-                    }
+        Task.detached {
+            let items = await model.models.asyncFilter {
+                await $0.fileURL() != nil
             }
 
-            queue.addOperation(operation)
+            do {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    var activeTasks = 0
+                    var itemIterator = items.makeIterator()
+
+                    func enqueueNext() {
+                        guard activeTasks < maxConcurrent, let item = itemIterator.next() else { return }
+
+                        activeTasks += 1
+                        group.addTask {
+                            defer { activeTasks -= 1 }
+
+                            let fileName = await item.getFileName()
+                            let filePath = await item.getFilePath()
+
+                            let destination: DownloadRequest.Destination = { _, _ in
+                                let directory = model.savePathURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                                return (
+                                    directory.appendingPathComponent(fileName),
+                                    [.removePreviousFile, .createIntermediateDirectories]
+                                )
+                            }
+
+                            let semaphore = AsyncSemaphore(value: 0)
+
+                            AF.download(filePath, to: destination)
+                                .validate()
+                                .downloadProgress { downloadProgress in
+                                    Task {
+                                        await item.setProgress(downloadProgress.fractionCompleted)
+                                        progress(item)
+                                    }
+                                }
+                                .response { response in
+                                    Task {
+                                        result(DownloadResult(result: response.result, downLoadItem: item))
+                                        await semaphore.signal()
+                                    }
+                                }
+
+                            await semaphore.wait()
+                        }
+                    }
+
+                    // 启动初始任务
+                    for _ in 0..<min(maxConcurrent, items.count) {
+                        enqueueNext()
+                    }
+
+                    for try await _ in group {
+                        enqueueNext()
+                    }
+                }
+            } catch {
+                print("Download failed with error: \(error.localizedDescription)")
+            }
+        }
+        
+        
+    }
+    
+    
+    actor AsyncSemaphore {
+        private var value: Int
+        private var waitQueue: [CheckedContinuation<Void, Never>] = []
+
+        init(value: Int) {
+            self.value = value
+        }
+
+        func wait() async {
+            if value > 0 {
+                value -= 1
+            } else {
+                await withCheckedContinuation { continuation in
+                    waitQueue.append(continuation)
+                }
+            }
+        }
+
+        func signal() {
+            if !waitQueue.isEmpty {
+                let continuation = waitQueue.removeFirst()
+                continuation.resume()
+            } else {
+                value += 1
+            }
         }
     }
 }
+
+
+// 1. 扩展定义
+extension Sequence {
+    func asyncFilter(_ isIncluded: @escaping (Element) async -> Bool) async -> [Element] {
+        var result: [Element] = []
+        for element in self {
+            if await isIncluded(element) {
+                result.append(element)
+            }
+        }
+        return result
+    }
+}
+
+
