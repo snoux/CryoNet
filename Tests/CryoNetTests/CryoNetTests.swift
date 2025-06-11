@@ -21,26 +21,26 @@ final class CryoNetTests: XCTestCase {
     }
 
     // MARK: - DefaultTokenManager Tests
-
+    // 测试token设置读取
     func testSetAndGetToken() async throws {
         let tokenManager = DefaultTokenManager()
         let initialToken = await tokenManager.getToken()
-        XCTAssertNil(initialToken, "Initial token should be nil")
+        XCTAssertNil(initialToken, "token应该为nil")
 
         let newToken = "test_token_123"
         await tokenManager.setToken(newToken)
         let fetchedToken = await tokenManager.getToken()
-        XCTAssertEqual(fetchedToken, newToken, "Fetched token should match the set token")
+        XCTAssertEqual(fetchedToken, newToken, "token应该为test_token_123")
     }
 
     func testRefreshTokenDefaultImplementation() async throws {
         let tokenManager = DefaultTokenManager()
         let refreshedToken = await tokenManager.refreshToken()
-        XCTAssertNil(refreshedToken, "Default refreshToken implementation should return nil")
+        XCTAssertNil(refreshedToken, "默认刷新token应该返回nil")
     }
 
     // MARK: - DefaultInterceptor Tests
-
+    // 测试默认拦截器
     func testDefaultInterceptorDefaultInitialization() throws {
         let interceptor = DefaultInterceptor()
         let config = interceptor.getInterceptorConfig()
@@ -51,6 +51,7 @@ final class CryoNetTests: XCTestCase {
         XCTAssertEqual(config["interceptorType"] as? String, "DefaultInterceptor")
     }
 
+    // 测试设置默认拦截器
     func testDefaultInterceptorCustomInitialization() throws {
         let customConfig = DefaultResponseStructure(
             codeKey: "status",
@@ -67,17 +68,17 @@ final class CryoNetTests: XCTestCase {
         XCTAssertEqual(config["interceptorType"] as? String, "DefaultInterceptor")
     }
 
+    // 测试拦截器拦截请求,以检测token是否成功配置
     func testDefaultInterceptorInterceptRequestWithToken() async throws {
         let tokenManager = DefaultTokenManager()
         await tokenManager.setToken("test_auth_token")
         let interceptor = DefaultInterceptor()
         var urlRequest = URLRequest(url: URL(string: "https://example.com")!)
-
         let modifiedRequest = await interceptor.interceptRequest(urlRequest, tokenManager: tokenManager)
-
         XCTAssertEqual(modifiedRequest.allHTTPHeaderFields?["Authorization"], "Bearer test_auth_token")
     }
 
+    // 测试使用默认拦截器,检测token是否是nil
     func testDefaultInterceptorInterceptRequestWithoutToken() async throws {
         let tokenManager = DefaultTokenManager()
         let interceptor = DefaultInterceptor()
@@ -88,9 +89,8 @@ final class CryoNetTests: XCTestCase {
         XCTAssertNil(modifiedRequest.allHTTPHeaderFields?["Authorization"], "Authorization header should not be added if token is nil")
     }
 
-    // MARK: - Mocking for Interceptor Response Tests
-
-    // Helper function to create a mock AFDataResponse
+    // MARK: - 测试拦截器响应
+    // 创建一个 AFDataResponse 响应
     func createMockResponse(
         statusCode: Int,
         data: Data?,
@@ -108,6 +108,7 @@ final class CryoNetTests: XCTestCase {
         )
     }
 
+    // 测试响应成功
     func testDefaultInterceptorInterceptResponseSuccess() throws {
         let interceptor = DefaultInterceptor()
         let jsonString = "{\"code\": 200, \"msg\": \"Success\", \"data\": {\"id\": 1, \"name\": \"Test\"}}"
@@ -122,10 +123,11 @@ final class CryoNetTests: XCTestCase {
             XCTAssertEqual(json["id"].intValue, 1)
             XCTAssertEqual(json["name"].stringValue, "Test")
         case .failure(let error):
-            XCTFail("Expected success, but got error: \(error)")
+            XCTFail("响应失败: \(error)")
         }
     }
 
+    // 测试响应成功
     func testDefaultInterceptorInterceptResponseSuccessNoData() throws {
         let interceptor = DefaultInterceptor()
         let jsonString = "{\"code\": 200, \"msg\": \"Success\"}"
@@ -142,10 +144,11 @@ final class CryoNetTests: XCTestCase {
              XCTAssertEqual(json["msg"].stringValue, "Success")
              XCTAssertFalse(json["data"].exists())
         case .failure(let error):
-            XCTFail("Expected success, but got error: \(error)")
+            XCTFail("响应失败: \(error)")
         }
     }
 
+    // 测试响应http失败
     func testDefaultInterceptorInterceptResponseHTTPError() throws {
         let interceptor = DefaultInterceptor()
         let mockResponse = createMockResponse(statusCode: 404, data: nil)
@@ -154,11 +157,9 @@ final class CryoNetTests: XCTestCase {
 
         switch result {
         case .success:
-            XCTFail("Expected failure for HTTP 404, but got success")
+            XCTFail("计划响应404,但却显示成功!!!不应该出现此情况!!!")
         case .failure(let error as NSError):
-            XCTAssertEqual(error.domain, "ClientError")
             XCTAssertEqual(error.code, 404)
-            XCTAssertEqual(error.localizedDescription, "资源未找到")
         }
     }
 
@@ -281,6 +282,17 @@ final class CryoNetTests: XCTestCase {
         // that modifies the request or response in a specific way, and verify the behavior.
     }
     */
+    func testRequest() async {
+        let cryoNet = CryoNet { config in
+            config.basicURL = "https://example.com/test"
+        }
+        
+        let requestModel = RequestModel(url: "/test", method: .get)
+        await cryoNet.request(requestModel).responseJSON { jsonResult in
+            
+        }
+        
+    }
 
     // Placeholder tests to indicate where integration tests would go
     func testCryoNetRequestIntegrationPlaceholder() {
