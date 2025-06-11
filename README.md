@@ -1,126 +1,115 @@
 # CryoNet
 
-CryoNet 是一个基于 Alamofire 和 SwiftyJSON 的轻量级网络请求框架，专为 Swift 项目设计。它提供了简洁易用的 API，支持多种数据解析方式，并具有强大的错误处理和拦截器功能。**（开发测试中）**
+CryoNet 是一款现代化、灵活且易于扩展的 Swift 网络请求与数据解析解决方案。它基于 Alamofire 和 SwiftyJSON 封装，支持异步/并发、灵活的 Token 与拦截器管理、多实例、模型驱动解析、本地 JSON 直转 Model 等特性，帮助你高效、优雅、可维护地构建网络层。
 
-原项目是本人为方便维护整理项目中的请求而进行封装的私有库，`CryoNet`在此基础上进行了优化
+---
 
+## 为什么选择 CryoNet
 
-## 特性
+- **原生 URLSession/Alamofire 太繁琐？**  
+  还在为参数封装、重复写数据解析、Token/刷新逻辑、调试日志痛苦吗？
+- **现有网络库扩展性不够？**  
+  难以支持多业务线、多 Token、多后端场景？
+- **模型驱动开发与本地模拟数据不统一？**  
+  希望本地 JSON、线上数据一键转 Model，无缝切换？
 
-- **简洁的 API**：链式调用，简化网络请求代码
-- **灵活的数据解析**：支持 SwiftyJSON 直接解析为模型，无需使用 JSONDecoder
-- **强大的拦截器**：支持请求和响应拦截，轻松处理认证和错误，如果您只想获取结构中你需要的数据，即使结构很深，配合拦截器使用`interceptJSONModel`依旧能够获取深层数据并直接转换为`Model`
-- **完整的类型支持**：支持 Swift 的强类型特性
-- **异步/等待支持**：提供现代化的 async/await API
-- **上传/下载支持**：简化文件上传和下载操作
-- **全面的错误处理**：详细的错误信息和调试日志
-- **可扩展性**：易于扩展和定制
+CryoNet 针对上述痛点重构自用网络库，为多项目、多业务线场景提供统一、易扩展的网络层解决方案。
+
+---
+
+## 主要特性
+
+- 🚀 **多实例架构**：支持多 baseURL、业务线、独立配置
+- 🧩 **模型驱动解析**：SwiftyJSON + JSONParseable，网络/本地数据一键转 Model
+- 🛡️ **Token/拦截器可插拔**：自定义 Token 管理与权限校验，拦截器可精准获取所需数据
+- 🧰 **链式/异步/回调 API**：支持 async/await 与回调风格
+- 🔄 **批量下载与并发管理**：自定义最大并发下载数，实时进度回调
+- 🧪 **本地 JSON 解析**：无需网络即可将本地 JSON/Data 解析为模型
+- 🛠 **高度可扩展**：配置、拦截器、Token 管理、下载目录等均可自定义
+
+---
 
 ## 安装
 
-### Swift Package Manager
+**仅支持 Swift Package Manager**
 
-在 `Package.swift` 文件中添加依赖：
+1. 打开你的 Xcode 项目（或 workspace）
+2. 菜单栏选择：File > Add Packages...
+3. 输入 `https://github.com/snow-xf/CryoNet.git`
+4. 选择 `main` 分支（开发中，代码随时更新），点击 `Add Package`
+5. Xcode 会自动拉取并集成
 
-```swift
-dependencies: [
-    .package(url: "https://github.com/snow-xf/CryoNet.git")
-]
-```
-> ** 由于还处于开发阶段，会随时提交新代码，如要使用导入时请选择main分支,主体结构已确定，不影响后续使用!! **
+---
 
+## 快速开始
 
-然后在需要使用的文件中导入：
+### 1. 创建实例
+
+**配置结构体初始化,每个实例独立互不干扰**
 
 ```swift
 import CryoNet
+
+let net = CryoNet(configuration: CryoNetConfiguration(
+    basicURL: "https://api.example.com",
+    basicHeaders: [HTTPHeader(name: "Content-Type", value: "application/json")],
+    defaultTimeout: 15,
+    maxConcurrentDownloads: 4,
+    tokenManager: MyTokenManager(),    // 可自定义
+    interceptor: MyRequestInterceptor() // 可自定义
+))
 ```
 
-## 基本用法
-
-### 初始化
+**链式自定义配置：**
 
 ```swift
-// 设置基础 URL
-let request = CryoNet.sharedInstance("https://api.example.com")
-```
-
-
-### 发送 GET 请求
-
-```swift
-// 创建请求模型
-let model = RequestModel(
-    url: "/users",
-    method: .get
-)
-
-// 发送请求
-request.request(model)
-    .responseJSON { json in
-        print(json)
-    } failed: { error in
-        print(error.localizedDescription)
-    }
-```
-
-### 发送 POST 请求
-
-```swift
-// 创建请求模型
-let model = RequestModel(
-    url: "/users",
-    method: .post,
-    parameters: ["name": "John", "email": "john@example.com"]
-)
-
-// 发送请求
-request.request(model)
-    .responseJSON { json in
-        print(json)
-    } failed: { error in
-        print(error.localizedDescription)
-    }
-```
-
-### 使用 async/await
-
-```swift
-do {
-    let model = RequestModel(url: "/users", method: .get)
-    let json = try await request.request(model).responseJSONAsync()
-    print(json)
-} catch {
-    print(error.localizedDescription)
+let net = CryoNet { config in
+    config.basicURL = "https://api.example.com"
+    config.defaultTimeout = 20
+    config.tokenManager = MyTokenManager()
 }
 ```
 
-## 数据解析
+### 2. 组织与管理 API
 
-### 使用 SwiftyJSON
+推荐用 `struct + static`、`enum` 管理接口，模块化分文件：
 
 ```swift
-request.request(model)
-    .responseJSON { json in
-        let name = json["name"].stringValue
-        let age = json["age"].intValue
-        print("Name: \(name), Age: \(age)")
-    }
+struct API_User {
+    static let getUser = RequestModel(url: "/user", method: .get, explain: "获取用户信息")
+}
+struct API_Login {
+    static let login = RequestModel(url: "/login", method: .get, explain: "登录接口")
+}
 ```
 
-### 使用 JSONParseable 协议解析为模型
+---
 
-首先定义符合 JSONParseable 协议的模型：
+## 典型用法示例
+
+### 1. 基本请求与 JSON 响应
+
+```swift
+net.request(API_User.getUser)
+   .responseJSON { json in
+        print(json["name"].stringValue)
+   } failed: { error in
+        print(error.localizedDescription)
+   }
+```
+
+### 2. 直接响应为 Model
+
+#### 定义 Model
 
 ```swift
 struct User: JSONParseable {
     let id: Int
     let name: String
     let email: String?
-    
+
     init?(json: JSON) {
         guard json["id"].exists() else { return nil }
-        
         self.id = json.int("id")
         self.name = json.string("name")
         self.email = json.optionalString("email")
@@ -128,308 +117,186 @@ struct User: JSONParseable {
 }
 ```
 
-然后直接解析为模型：
+#### 网络响应直接转 Model
 
 ```swift
-request.request(model)
+net.request(API_User.getUser)
     .responseJSONModel(type: User.self) { user in
-        print("User: \(user.name), Email: \(user.email ?? "N/A")")
+        print("User: \(user.name)")
     } failed: { error in
         print(error.localizedDescription)
     }
 ```
 
-### 使用自定义解析闭包
+### 3. 拦截器精准提取数据（如只取 data 字段）
+
+假设你的响应为：
+
+```json
+{
+    "reason": "success",
+    "result": {
+        "stat": "1",
+        "data": [...]
+    },
+    "error_code": 0
+}
+```
+
+**自定义响应结构解析：**
 
 ```swift
-request.request(model)
-    .responseJSONModel(parser: { json in
-        guard json["id"].exists() else { return nil }
-        
-        return User(
-            id: json.int("id"),
-            name: json.string("name"),
-            email: json.optionalString("email")
+final class MyResponseConfig: DefaultResponseStructure, @unchecked Sendable {
+    init() {
+        super.init(
+            codeKey: "error_code",
+            messageKey: "reason",
+            dataKey: "result",
+            successCode: 0
         )
-    }) { user in
-        print("User: \(user.name)")
-    }
-```
-
-### 处理嵌套 JSON
-
-```swift
-// 处理嵌套的JSON路径
-request.request(model)
-    .responseJSONModel(type: User.self, keyPath: "data.user") { user in
-        print("User: \(user.name)")
     }
 
-// 处理嵌套的JSON字符串
-request.request(model)
-    .responseJSON { json in
-        let userJson = json.parseNestedJSON("data")["user"]
-        if let user = userJson.toModel(User.self) {
-            print("User from nested JSON string: \(user.name)")
+    override func extractData(from json: JSON, originalData: Data) -> Result<Data, any Error> {
+        let targetData = json[dataKey]["data"]
+
+        do {
+            let validData: Data = try targetData.rawData()
+            return .success(validData)
+        } catch {
+            return .failure(NSError(
+                domain: "DataError",
+                code: -1004,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "数据转换失败",
+                    NSUnderlyingErrorKey: error
+                ]
+            ))
         }
     }
-```
 
-## 拦截器
-
-### 创建拦截器
-
-```swift
-class MyInterceptor: RequestInterceptorProtocol {
-    func interceptRequest(_ request: URLRequest) -> URLRequest {
-        var mutableRequest = request
-        // 添加认证头
-        mutableRequest.addValue("Bearer token", forHTTPHeaderField: "Authorization")
-        return mutableRequest
-    }
-    
-    func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
-        // 处理响应
-        switch response.result {
-        case .success(let data):
-            if let data = data {
-                // 检查API状态码
-                let json = try? JSON(data: data)
-                if let code = json?["code"].int, code != 200 {
-                    let message = json?["message"].stringValue ?? "Unknown error"
-                    return .failure(NSError(domain: "APIError", code: code, userInfo: [NSLocalizedDescriptionKey: message]))
-                }
-                // 返回数据部分
-                if let dataJson = json?["data"], let dataData = try? dataJson.rawData() {
-                    return .success(dataData)
-                }
-            }
-            return .failure(NSError(domain: "APIError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid data"]))
-        case .failure(let error):
-            return .failure(error)
-        }
-    }
-    
-    func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
-        // 返回完整响应
-        switch response.result {
-        case .success(let data):
-            if let data = data {
-                return .success(data)
-            }
-            return .failure(NSError(domain: "APIError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty data"]))
-        case .failure(let error):
-            return .failure(error)
-        }
+    override func isSuccess(json: JSON) -> Bool {
+        return json[codeKey].intValue == successCode
     }
 }
 ```
 
-### 使用拦截器
+**拦截器注入：**
 
 ```swift
-// 设置拦截器
-CryoNet.setInterceptor(MyInterceptor())
-
-// 使用拦截器处理响应
-request.request(model)
-    .interceptJSON { json in
-        print("Intercepted JSON: \(json)")
-    } failed: { error in
-        print("Error: \(error)")
+class MyInterceptor: DefaultInterceptor, @unchecked Sendable {
+    init() {
+        let responseConfig = MyResponseConfig()
+        super.init(responseConfig: responseConfig)
     }
+}
+```
 
-// 获取拦截器处理后的模型
-request.request(model)
-    .interceptJSONModel(type: User.self) { user in
-        print("User: \(user.name)")
+**用法：**
+
+```swift
+let net = CryoNet { config in
+    config.basicURL = "https://api.example.com"
+    config.interceptor = MyInterceptor()
+}
+```
+
+或在请求时指定：
+
+```swift
+await net.request(API_News.index, interceptor: MyInterceptor())
+    .interceptJSONModelArray(type: NewsModel.self) { value in
+        self.newsList = value
     } failed: { error in
-        print("Error: \(error)")
+        print("失败原因:\(error)")
     }
 ```
 
-## 上传文件
+---
+
+### 4. 本地 JSON/Data 解析为 Model（无需网络）
 
 ```swift
-// 创建上传数据
-let imageData = UIImage(named: "example")?.jpegData(compressionQuality: 0.8)
-let uploadData = UploadData(
-    file: .fileData(imageData),
-    name: "file",
-    fileName: "image.jpg"
+let jsonString = """
+{
+    "id": 1,
+    "name": "Tom"
+}
+"""
+if let data = jsonString.data(using: .utf8),
+   let json = try? JSON(data: data),
+   let user = json.toModel(User.self) {
+    print(user.name)
+}
+```
+
+---
+
+### 5. 批量下载与进度管理
+
+```swift
+let downloadModel = DownloadModel(models: [...], savePathURL: ...)
+
+await net.downloadFile(
+    downloadModel,
+    progress: { item in
+        print("进度: \(item.progress)")
+    },
+    result: { downloadResult in
+        print("单项下载完成: \(downloadResult.downLoadItem)")
+    }
 )
-
-// 创建请求模型
-let model = RequestModel(url: "/upload", method: .post)
-
-// 上传文件
-request.upload(model, files: [uploadData])
-    .progress { progress in
-        print("上传进度: \(progress)")
-    }
-    .responseJSON { json in
-        print("上传成功: \(json)")
-    } failed: { error in
-        print("上传失败: \(error.localizedDescription)")
-    }
 ```
 
-## 下载文件
+---
+
+## 拦截器与 Token 管理
+
+### 1. 自定义 TokenManager/Interceptor
 
 ```swift
-// 创建下载项
-let item = DownloadItem(
-    fileName: "example.pdf",
-    filePath: "https://example.com/files/example.pdf"
-)
-let model = DownloadModel(savePath: nil, models: [item])
+class MyTokenManager: TokenManagerProtocol {
+    // 实现协议，管理 accessToken/refreshToken
+}
 
-// 下载文件
-request.downloadFile(model) { item in
-    print("下载进度: \(item.progress)")
-} result: { result in
-    switch result.result {
-    case .success(let url):
-        print("下载成功: \(url?.path ?? "")")
-    case .failure(let error):
-        print("下载失败: \(error.localizedDescription)")
-    }
+class MyRequestInterceptor: RequestInterceptorProtocol {
+    // 实现协议，统一添加 Token、处理 401 等
 }
 ```
 
-## 高级用法
-
-### 设置全局配置
+### 2. 注入实例
 
 ```swift
-// 设置全局超时时间
-CryoNet.setTimeout(30)
-
-// 设置全局头部
-CryoNet.setHeaders(["User-Agent": "CryoNet/1.0"])
-
-// 设置全局参数
-CryoNet.setParameters(["app_version": "1.0.0"])
-```
-
-### 取消请求
-
-```swift
-// 取消单个请求
-let task = request.request(model)
-task.cancel()
-
-// 取消所有请求
-CryoNet.cancelAllRequests()
-```
-
-### 处理复杂嵌套 JSON
-
-```swift
-struct Response: JSONParseable {
-    let success: Bool
-    let message: String
-    let data: ResponseData?
-    
-    init?(json: JSON) {
-        self.success = json.bool("success")
-        self.message = json.string("message")
-        self.data = ResponseData(json: json["data"])
-    }
-}
-
-struct ResponseData: JSONParseable {
-    let users: [User]
-    let pagination: Pagination
-    
-    init?(json: JSON) {
-        guard json.exists() else { return nil }
-        
-        self.users = json.toModelArray(User.self, keyPath: "users")
-        self.pagination = Pagination(json: json["pagination"]) ?? Pagination.default
-    }
-}
-
-// 使用
-request.request(model)
-    .responseJSONModel(type: Response.self) { response in
-        if response.success {
-            if let data = response.data {
-                print("Total users: \(data.users.count)")
-                print("Page: \(data.pagination.page)/\(data.pagination.total)")
-            }
-        } else {
-            print("Error message: \(response.message)")
-        }
-    }
-```
-
-### 与 Codable 协议兼容
-
-对于需要与现有 Codable 模型兼容的情况，可以同时实现两个协议：
-
-```swift
-struct User: JSONParseable, Codable {
-    let id: Int
-    let name: String
-    
-    // Codable 默认实现
-    
-    // JSONParseable 实现
-    init?(json: JSON) {
-        guard json["id"].exists() else { return nil }
-        self.id = json.int("id")
-        self.name = json.string("name")
-    }
+let net = CryoNet { config in
+    config.basicURL = "..."
+    config.tokenManager = MyTokenManager()
+    config.interceptor = MyRequestInterceptor()
 }
 ```
 
-或者为 CryoResult 添加支持 Codable 的扩展方法：
+### 3. 动态配置/Token 更新
 
 ```swift
-extension CryoResult {
-    @discardableResult
-    public func responseCodableModel<T: Decodable>(
-        type: T.Type,
-        success: @escaping (T) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
-    ) -> CryoResult {
-        responseData { data in
-            do {
-                let model = try JSONDecoder().decode(T.self, from: data)
-                success(model)
-            } catch {
-                let decodingError = GenericCryoError(error)
-                failed(decodingError)
-            }
-        } failed: { error in
-            failed(error)
-        }
-        return self
-    }
+await net.updateConfiguration { config in
+    config.tokenManager = NewTokenManager()
 }
 ```
 
-## 调试
+---
 
-CryoNet 在 DEBUG 模式下会自动打印详细的请求和响应日志，包括：
+## 扩展与自定义
 
-- 请求 URL
-- 请求头
-- 请求参数
-- 响应状态
-- 响应数据
-- 错误信息
+- 所有配置、拦截器、Token 管理等均可自定义扩展，满足多业务线、复杂场景需求
+- 支持本地/远程 JSON、Data 解析与模型转换
+- 支持多实例、动态切换 baseURL、独立 Token、拦截器
 
-这些日志可以帮助您快速定位问题。
+---
 
-## 要求
+## 贡献与反馈
 
-- iOS 13.0+ / macOS 10.15+
-- Swift 5.0+
-- Xcode 12.0+
+CryoNet 致力于让 Swift 网络开发更高效、安全、优雅。欢迎 Star及反馈建议！
 
-## 许可证
+更多高级用法和 API 参考，请查阅源码与即将发布的 Demo。
 
-CryoNet 使用 MIT 许可证。详情请参阅 LICENSE 文件。
+---
 
+**如需详细代码示例或深入用法，欢迎联系作者或关注仓库更新。**
