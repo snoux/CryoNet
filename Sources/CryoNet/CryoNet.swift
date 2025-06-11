@@ -3,28 +3,16 @@ import Alamofire
 import SwiftUI
 import SwiftyJSON
 
-/// CryoNet配置对象
+// MARK: - 配置对象
 @available(macOS 10.15, iOS 13, *)
 public struct CryoNetConfiguration: Sendable {
-    /// 基础URL，用于与请求路径拼接
     public var basicURL: String
-    
-    /// 基础HTTP请求头，会与每个请求的头部合并
     public var basicHeaders: [HTTPHeader]
-    
-    /// 默认请求超时时间（秒）
     public var defaultTimeout: TimeInterval
-    
-    /// 默认最大并发下载数
     public var maxConcurrentDownloads: Int
-    
-    /// Token管理器
     public var tokenManager: TokenManagerProtocol
-    
-    /// 请求拦截器
     public var interceptor: RequestInterceptorProtocol
-    
-    /// 初始化配置
+
     public init(
         basicURL: String = "",
         basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
@@ -42,47 +30,37 @@ public struct CryoNetConfiguration: Sendable {
     }
 }
 
-/// CryoNet 网络请求核心封装类
+// MARK: - 线程安全配置管理（使用 actor）
+@available(macOS 10.15, iOS 13, *)
+actor ConfigurationActor {
+    private var configuration: CryoNetConfiguration
+
+    init(configuration: CryoNetConfiguration) {
+        self.configuration = configuration
+    }
+
+    func getConfiguration() -> CryoNetConfiguration {
+        configuration
+    }
+
+    func setConfiguration(_ config: CryoNetConfiguration) {
+        configuration = config
+    }
+
+    func updateConfiguration(_ update: (inout CryoNetConfiguration) -> Void) {
+        update(&configuration)
+    }
+}
+
+// MARK: - CryoNet 主体
 @available(macOS 10.15, iOS 13, *)
 public class CryoNet {
-    
-    // MARK: - 属性
-    /// 实例配置
-    private var configurationActor: ConfigurationActor
-    private struct ConfigurationActor: Sendable {
-        private var _configuration: CryoNetConfiguration
-        private let queue = DispatchQueue(label: "com.cryonet.config.queue", attributes: .concurrent)
-        
-        init(configuration: CryoNetConfiguration) {
-            self._configuration = configuration
-        }
-        
-        func getConfiguration() -> CryoNetConfiguration {
-            queue.sync { _configuration }
-        }
-        
-        mutating func setConfiguration(_ config: CryoNetConfiguration) {
-            queue.sync(flags: .barrier) {
-                self._configuration = config
-            }
-        }
-        
-        mutating func updateConfiguration(_ update: @escaping (inout CryoNetConfiguration) -> Void) {
-            queue.sync(flags: .barrier) {
-                update(&self._configuration)
-            }
-        }
-    }
-    
-    // MARK: - 初始化方法
-    
-    /// 初始化方法，允许外部注入配置
+    private let configurationActor: ConfigurationActor
+
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
         self.configurationActor = ConfigurationActor(configuration: configuration)
     }
-    
-    /// 闭包配置初始化方法
-    /// - Parameter configurator: 配置闭包，用于自定义配置
+
     public convenience init(
         configurator: (inout CryoNetConfiguration) -> Void
     ) {
@@ -91,50 +69,38 @@ public class CryoNet {
         self.init(configuration: configuration)
     }
 
-    // MARK: - 配置管理
-    
-    /// 获取当前配置
-    /// - Returns: 当前CryoNet配置
-    public func getConfiguration() -> CryoNetConfiguration {
-        configurationActor.getConfiguration()
+    // MARK: - 配置管理 API（async）
+
+    public func getConfiguration() async -> CryoNetConfiguration {
+        await configurationActor.getConfiguration()
     }
-    
-    /// 设置新的配置
-    /// - Parameter config: 新的配置对象
-    public func setConfiguration(_ config: CryoNetConfiguration) {
-        configurationActor.setConfiguration(config)
+
+    public func setConfiguration(_ config: CryoNetConfiguration) async {
+        await configurationActor.setConfiguration(config)
     }
-    
-    /// 更新部分配置
-    /// - Parameter update: 配置更新闭包
+
     public func updateConfiguration(
         _ update: @escaping (inout CryoNetConfiguration) -> Void
-    ) {
-        configurationActor.updateConfiguration(update)
+    ) async {
+        await configurationActor.updateConfiguration(update)
     }
-    
+
     // MARK: - 配置验证和调试
-    
-    /// 验证当前拦截器配置
-    /// - Returns: 配置验证结果
-    public func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
-        let currentInterceptor = configurationActor.getConfiguration().interceptor
+
+    public func validateInterceptorConfiguration() async -> (isValid: Bool, message: String) {
+        let currentInterceptor = await configurationActor.getConfiguration().interceptor
         let interceptorType = String(describing: type(of: currentInterceptor))
-        
         if interceptorType.contains("DefaultInterceptor") {
             return (false, "当前使用默认拦截器，可能配置未生效")
         } else {
             return (true, "当前使用自定义拦截器: \(interceptorType)")
         }
     }
-    
-    /// 获取当前拦截器信息
-    /// - Returns: 拦截器信息
-    public func getCurrentInterceptorInfo() -> String {
-        let config = configurationActor.getConfiguration()
+
+    public func getCurrentInterceptorInfo() async -> String {
+        let config = await configurationActor.getConfiguration()
         let interceptorType = String(describing: type(of: config.interceptor))
         let tokenManagerType = String(describing: type(of: config.tokenManager))
-        
         return """
         当前拦截器类型: \(interceptorType)
         当前Token管理器类型: \(tokenManagerType)
@@ -146,55 +112,14 @@ public class CryoNet {
 @available(macOS 10.15, iOS 13, *)
 private extension CryoNet {
 
-    /// 上传文件私有方法
-    /// - Parameters:
-    ///   - model: 请求模型
-    ///   - files: 上传文件数组
-    ///   - parameters: 附加参数
-    ///   - headers: 请求头
-    ///   - interceptor: 可选的请求拦截器
-    /// - Returns: 数据请求对象
-    func uploadFile(
-        _ model: RequestModel,
-        files: [UploadData],
-        parameters: [String: Any],
-        headers: [HTTPHeader],
-        interceptor: (any RequestInterceptor)? = nil
-    ) -> DataRequest {
-        let config = configurationActor.getConfiguration()
-        let fullURL = model.fullURL(with: config.basicURL)
-
-        return AF.upload(
-            multipartFormData: { multipart in
-                files.forEach { item in
-                    switch item.file {
-                    case .fileData(let data):
-                        if let data = data {
-                            multipart.append(data, withName: item.name, fileName: item.fileName)
-                        }
-                    case .fileURL(let url):
-                        if let url = url {
-                            multipart.append(url, withName: item.name)
-                        }
-                    }
-                }
-                // 添加附加参数
-                parameters.forEach { key, value in
-                    if let data = self.anyToData(value) {
-                        multipart.append(data, withName: key)
-                    }
-                }
-            },
-            to: fullURL,
-            method: model.method,
-            headers: mergeHeaders(headers),
-            interceptor: interceptor
-        )
+    func mergeHeaders(_ headers: [HTTPHeader], config: CryoNetConfiguration) -> HTTPHeaders {
+        let allHeaders = (config.basicHeaders + headers)
+        // 合并去重
+        let uniqueHeaders = Dictionary(grouping: allHeaders, by: { $0.name.lowercased() })
+            .map { $0.value.first! }
+        return HTTPHeaders(uniqueHeaders)
     }
 
-    /// 将任意类型转换为Data
-    /// - Parameter value: 任意类型的值
-    /// - Returns: 转换后的Data，如果无法转换则返回nil
     func anyToData(_ value: Any) -> Data? {
         switch value {
         case let int as Int:
@@ -214,13 +139,40 @@ private extension CryoNet {
         }
     }
 
-    /// 合并请求头
-    /// - Parameter headers: 请求特定的HTTP请求头
-    /// - Returns: 合并后的HTTP请求头
-    func mergeHeaders(_ headers: [HTTPHeader]) -> HTTPHeaders {
-        let config = configurationActor.getConfiguration()
-        let allHeaders = config.basicHeaders + headers
-        return HTTPHeaders(allHeaders)
+    func uploadFile(
+        _ model: RequestModel,
+        files: [UploadData],
+        parameters: [String: Any],
+        headers: [HTTPHeader],
+        interceptor: (any RequestInterceptor)? = nil,
+        config: CryoNetConfiguration
+    ) -> DataRequest {
+        let fullURL = model.fullURL(with: config.basicURL)
+        return AF.upload(
+            multipartFormData: { multipart in
+                files.forEach { item in
+                    switch item.file {
+                    case .fileData(let data):
+                        if let data = data {
+                            multipart.append(data, withName: item.name, fileName: item.fileName)
+                        }
+                    case .fileURL(let url):
+                        if let url = url {
+                            multipart.append(url, withName: item.name)
+                        }
+                    }
+                }
+                parameters.forEach { key, value in
+                    if let data = self.anyToData(value) {
+                        multipart.append(data, withName: key)
+                    }
+                }
+            },
+            to: fullURL,
+            method: model.method,
+            headers: mergeHeaders(headers, config: config),
+            interceptor: interceptor
+        )
     }
 }
 
@@ -228,14 +180,6 @@ private extension CryoNet {
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
 
-    /// 上传接口
-    /// - Parameters:
-    ///   - model: 请求模型
-    ///   - files: 上传文件数组
-    ///   - parameters: 附加参数
-    ///   - headers: 请求头
-    ///   - interceptor: 可选的请求拦截器
-    /// - Returns: CryoResult对象
     @discardableResult
     func upload(
         _ model: RequestModel,
@@ -243,48 +187,39 @@ public extension CryoNet {
         parameters: [String: Any] = [:],
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
-    ) -> CryoResult {
-        let config = configurationActor.getConfiguration()
+    ) async -> CryoResult {
+        let config = await configurationActor.getConfiguration()
         let userInterceptor = interceptor ?? config.interceptor
         let adapter = InterceptorAdapter(
             interceptor: userInterceptor,
             tokenManager: config.tokenManager
         )
-
         let request = uploadFile(
             model,
             files: files,
             parameters: parameters,
             headers: headers,
-            interceptor: adapter
+            interceptor: adapter,
+            config: config
         ).validate()
-
         return CryoResult(request: request, interceptor: userInterceptor)
     }
 
-    /// 普通请求接口
-    /// - Parameters:
-    ///   - model: 请求模型
-    ///   - parameters: 请求参数
-    ///   - headers: 请求头
-    ///   - interceptor: 可选的请求拦截器
-    /// - Returns: CryoResult对象
     @discardableResult
     func request(
         _ model: RequestModel,
         parameters: [String: Any]? = nil,
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
-    ) -> CryoResult {
-        let config = configurationActor.getConfiguration()
+    ) async -> CryoResult {
+        let config = await configurationActor.getConfiguration()
         let fullURL = model.fullURL(with: config.basicURL)
-        let mergedHeaders = mergeHeaders(headers)
+        let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
         let adapter = InterceptorAdapter(
             interceptor: userInterceptor,
             tokenManager: config.tokenManager
         )
-
         let request = AF.request(
             fullURL,
             method: model.method,
@@ -294,90 +229,100 @@ public extension CryoNet {
             interceptor: adapter
         ) { $0.timeoutInterval = model.overtime }
         .validate()
-
         return CryoResult(request: request, interceptor: userInterceptor)
     }
 
-    /// 文件下载接口（支持批量下载）
-    /// - Parameters:
-    ///   - model: 下载模型
-    ///   - progress: 下载进度回调
-    ///   - result: 下载结果回调
+    @available(macOS 10.15, iOS 13, *)
     func downloadFile(
         _ model: DownloadModel,
         progress: @escaping @Sendable (DownloadItem) -> Void,
         result: @escaping @Sendable (DownloadResult) -> Void = { _ in }
-    ) {
-        let config = configurationActor.getConfiguration()
+    ) async {
+        let config = await configurationActor.getConfiguration()
         let maxConcurrent = config.maxConcurrentDownloads
 
-        Task.detached {
-            let items = await model.models.asyncFilter {
-                await $0.fileURL() != nil
+        // 过滤掉无效下载项
+        let items = await model.models.asyncFilter {
+            await $0.fileURL() != nil
+        }
+
+        // 自定义 actor 信号量
+        actor AsyncSemaphore {
+            private var value: Int
+            private var waitQueue: [CheckedContinuation<Void, Never>] = []
+
+            init(value: Int) {
+                self.value = value
             }
 
-            do {
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    var activeTasks = 0
-                    var itemIterator = items.makeIterator()
-
-                    func enqueueNext() {
-                        guard activeTasks < maxConcurrent, let item = itemIterator.next() else { return }
-
-                        activeTasks += 1
-                        group.addTask {
-                            defer { activeTasks -= 1 }
-
-                            let fileName = await item.getFileName()
-                            let filePath = await item.getFilePath()
-
-                            let destination: DownloadRequest.Destination = { _, _ in
-                                let directory = model.savePathURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-                                return (
-                                    directory.appendingPathComponent(fileName),
-                                    [.removePreviousFile, .createIntermediateDirectories]
-                                )
-                            }
-
-                            let semaphore = AsyncSemaphore(value: 0)
-
-                            AF.download(filePath, to: destination)
-                                .validate()
-                                .downloadProgress { downloadProgress in
-                                    Task {
-                                        await item.setProgress(downloadProgress.fractionCompleted)
-                                        progress(item)
-                                    }
-                                }
-                                .response { response in
-                                    Task {
-                                        result(DownloadResult(result: response.result, downLoadItem: item))
-                                        await semaphore.signal()
-                                    }
-                                }
-
-                            await semaphore.wait()
-                        }
-                    }
-
-                    // 启动初始任务
-                    for _ in 0..<min(maxConcurrent, items.count) {
-                        enqueueNext()
-                    }
-
-                    for try await _ in group {
-                        enqueueNext()
+            func wait() async {
+                if value > 0 {
+                    value -= 1
+                } else {
+                    await withCheckedContinuation { continuation in
+                        waitQueue.append(continuation)
                     }
                 }
-            } catch {
-                print("Download failed with error: \(error.localizedDescription)")
+            }
+
+            func signal() async {
+                if !waitQueue.isEmpty {
+                    let continuation = waitQueue.removeFirst()
+                    continuation.resume()
+                } else {
+                    value += 1
+                }
             }
         }
-        
-        
+
+        let semaphore = AsyncSemaphore(value: maxConcurrent)
+
+        await withTaskGroup(of: Void.self) { group in
+            for item in items {
+                group.addTask {
+                    await semaphore.wait()
+                    defer { Task { await semaphore.signal() } } // 用Task包裹，避免defer里不能直接await
+
+                    let fileName = await item.getFileName()
+                    let filePath = await item.getFilePath()
+                    let destination: DownloadRequest.Destination = { _, _ in
+                        let directory = model.savePathURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                        return (
+                            directory.appendingPathComponent(fileName),
+                            [.removePreviousFile, .createIntermediateDirectories]
+                        )
+                    }
+
+                    let downloadRequest = AF.download(filePath, to: destination)
+                        .validate()
+                        .downloadProgress { downloadProgress in
+                            // 始终回调到主线程，方便UI刷新
+                            DispatchQueue.main.async {
+                                Task {
+                                    await item.setProgress(downloadProgress.fractionCompleted)
+                                    progress(item)
+                                }
+                            }
+                        }
+                        .response { response in
+                            DispatchQueue.main.async {
+                                Task {
+                                    result(DownloadResult(result: response.result, downLoadItem: item))
+                                }
+                            }
+                        }
+
+                    // 等待下载完成
+                    await withCheckedContinuation { continuation in
+                        downloadRequest.response { _ in
+                            continuation.resume()
+                        }
+                    }
+                }
+            }
+        }
     }
-    
-    
+
     actor AsyncSemaphore {
         private var value: Int
         private var waitQueue: [CheckedContinuation<Void, Never>] = []
@@ -407,8 +352,7 @@ public extension CryoNet {
     }
 }
 
-
-// 1. 扩展定义
+// MARK: - 异步过滤扩展
 extension Sequence {
     func asyncFilter(_ isIncluded: @escaping (Element) async -> Bool) async -> [Element] {
         var result: [Element] = []
@@ -420,6 +364,3 @@ extension Sequence {
         return result
     }
 }
-
-
-
