@@ -13,7 +13,7 @@ CryoNet 是一款现代化、灵活且易于扩展的 Swift 网络请求与数�
 - **模型驱动开发与本地模拟数据不统一？**  
   希望本地 JSON、线上数据一键转 Model，无缝切换？
 
-CryoNet 针对上述痛点重构自用网络库，为多项目、多业务线场景提供统一、易扩展的网络层解决方案。
+CryoNet 针对上述痛点重构自用私有网络库，为多项目、多业务线场景提供统一、易扩展的网络层解决方案。
 
 ---
 
@@ -149,13 +149,14 @@ net.request(API_User.getUser)
 final class MyResponseConfig: DefaultResponseStructure, @unchecked Sendable {
     init() {
         super.init(
-            codeKey: "error_code",
-            messageKey: "reason",
-            dataKey: "result",
-            successCode: 0
+            codeKey: "error_code",  // 状态码 key path
+            messageKey: "reason",  //  说明 key path 
+            dataKey: "result",  // 结果 key path
+            successCode: 0  // 表示成功的 key path
         )
     }
 
+    // 重写 extractData 方法 ，返回需要的数据（一般来说数据仅有一层仅需要调用super.init进行配置即可，无需再重写该方法，但深层数据必须重写该方法返回正确的数据）
     override func extractData(from json: JSON, originalData: Data) -> Result<Data, any Error> {
         let targetData = json[dataKey]["data"]
 
@@ -173,12 +174,13 @@ final class MyResponseConfig: DefaultResponseStructure, @unchecked Sendable {
             ))
         }
     }
-
+    // 重写 isSuccess 方法，告诉拦截器请求是否成功（一般来说可以不用实现该方法，响应会从配置中做验证，状态码层级较深时必须实现，否则将判断失效）
     override func isSuccess(json: JSON) -> Bool {
         return json[codeKey].intValue == successCode
     }
 }
 ```
+
 
 **拦截器注入：**
 
@@ -210,6 +212,12 @@ await net.request(API_News.index, interceptor: MyInterceptor())
         print("失败原因:\(error)")
     }
 ```
+
+**控制台打印：**
+> 完整的日志打印（如遇异常会打印完整数据，帮助与后端对接调试）
+<img width="1274" alt="image" src="https://github.com/user-attachments/assets/289a9b93-4d16-42e3-af17-a16c3e85efd7" />
+
+
 
 ---
 
