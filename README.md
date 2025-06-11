@@ -1,30 +1,18 @@
 # CryoNet
 
-CryoNet 是一款现代化、灵活且易于扩展的 Swift 网络请求与数据解析解决方案。它基于 Alamofire 和 SwiftyJSON 封装，支持异步/并发、灵活的 Token 与拦截器管理、多实例、模型驱动解析、本地 JSON 直转 Model 等特性，帮助你高效、优雅、可维护地构建网络层。
+CryoNet 是一款现代化、灵活且易于扩展的 Swift 网络请求与数据解析框架。基于 Alamofire 和 SwiftyJSON 封装，支持异步/并发、灵活的 Token 与拦截器、批量下载、模型驱动开发等特性，适用于多业务线及复杂网络场景。
 
 ---
 
-## 为什么选择 CryoNet
 
-- **原生 URLSession/Alamofire 太繁琐？**  
-  还在为参数封装、重复写数据解析、Token/刷新逻辑、调试日志痛苦吗？
-- **现有网络库扩展性不够？**  
-  难以支持多业务线、多 Token、多后端场景？
-- **模型驱动开发与本地模拟数据不统一？**  
-  希望本地 JSON、线上数据一键转 Model，无缝切换？
-
-CryoNet 针对上述痛点重构自用私有网络库，为多项目、多业务线场景提供统一、易扩展的网络层解决方案。
-
----
-
-## 主要特性
+## 特点亮点
 
 - 🚀 **多实例架构**：支持多 baseURL、业务线、独立配置
 - 🧩 **模型驱动解析**：SwiftyJSON + JSONParseable，网络/本地数据一键转 Model
 - 🛡️ **Token/拦截器可插拔**：自定义 Token 管理与权限校验，拦截器可精准获取所需数据
-- 🧰 **链式/异步/回调 API**：支持 async/await 与回调风格
+- 🧰 **链式/异步/回调 API**：支持 async/await 与回调风格，灵活易用
 - 🔄 **批量下载与并发管理**：自定义最大并发下载数，实时进度回调
-- 🧪 **本地 JSON 解析**：无需网络即可将本地 JSON/Data 解析为模型
+- 🧪 **本地 JSON 解析**：可将本地 JSON/Data 解析为模型
 - 🛠 **高度可扩展**：配置、拦截器、Token 管理、下载目录等均可自定义
 
 ---
@@ -36,8 +24,7 @@ CryoNet 针对上述痛点重构自用私有网络库，为多项目、多业务
 1. 打开你的 Xcode 项目（或 workspace）
 2. 菜单栏选择：File > Add Packages...
 3. 输入 `https://github.com/snow-xf/CryoNet.git`
-4. 选择 `main` 分支（开发中，代码随时更新），点击 `Add Package`
-5. Xcode 会自动拉取并集成
+4. 选择 `main` 分支并点击 `Add Package`。（由于还处于开发测试阶段，请暂时选择`main`,后续更新使用将不会有太大变化，可以放心!）
 
 ---
 
@@ -148,6 +135,7 @@ net.request(API_User.getUser)
 ```swift
 final class MyResponseConfig: DefaultResponseStructure, @unchecked Sendable {
     init() {
+        // 要获取的数据结构在外层时仅实现该方法即可
         super.init(
             codeKey: "error_code",  // 状态码 key path
             messageKey: "reason",  //  说明 key path 
@@ -214,14 +202,14 @@ await net.request(API_News.index, interceptor: MyInterceptor())
 ```
 
 **控制台打印：**
-> 完整的日志打印（如遇异常会打印完整数据，帮助与后端对接调试）
+> 完整的日志打印，可以发现已经成功获取到我们指定的数据（如遇异常会打印完整数据，帮助与后端对接调试）
 <img width="1274" alt="image" src="https://github.com/user-attachments/assets/289a9b93-4d16-42e3-af17-a16c3e85efd7" />
 
 
 
 ---
 
-### 4. 本地 JSON/Data 解析为 Model（无需网络）
+### 4. 本地 JSON/Data 解析为 Model
 
 ```swift
 let jsonString = """
