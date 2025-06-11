@@ -44,7 +44,7 @@ public struct CryoNetConfiguration: Sendable {
 
 /// CryoNet 网络请求核心封装类
 @available(macOS 10.15, iOS 13, *)
-public actor CryoNet: Sendable {
+public class CryoNet {
     
     // MARK: - 属性
     /// 实例配置
@@ -62,15 +62,15 @@ public actor CryoNet: Sendable {
         }
         
         mutating func setConfiguration(_ config: CryoNetConfiguration) {
-//            queue.async(flags: .barrier) {
+            queue.sync(flags: .barrier) {
                 self._configuration = config
-//            }
+            }
         }
         
         mutating func updateConfiguration(_ update: @escaping (inout CryoNetConfiguration) -> Void) {
-//            queue.async(flags: .barrier) {
+            queue.sync(flags: .barrier) {
                 update(&self._configuration)
-//            }
+            }
         }
     }
     
@@ -83,7 +83,9 @@ public actor CryoNet: Sendable {
     
     /// 闭包配置初始化方法
     /// - Parameter configurator: 配置闭包，用于自定义配置
-    public init(configurator: (inout CryoNetConfiguration) -> Void) {
+    public convenience init(
+        configurator: (inout CryoNetConfiguration) -> Void
+    ) {
         var configuration = CryoNetConfiguration()
         configurator(&configuration)
         self.init(configuration: configuration)
@@ -418,5 +420,6 @@ extension Sequence {
         return result
     }
 }
+
 
 
