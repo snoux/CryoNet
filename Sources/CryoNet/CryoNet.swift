@@ -352,6 +352,73 @@ public extension CryoNet {
     }
 }
 
+// MARK: - 回调风格包装
+@available(macOS 10.15, iOS 13, *)
+public extension CryoNet {
+    /// 回调风格 request
+    func request(
+        _ model: RequestModel,
+        parameters: [String: Any]? = nil,
+        headers: [HTTPHeader] = [],
+        interceptor: RequestInterceptorProtocol? = nil,
+        completion: @escaping (CryoResult) -> Void
+    ) {
+        Task {
+            let result = await request(
+                model,
+                parameters: parameters,
+                headers: headers,
+                interceptor: interceptor
+            )
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+
+    /// 回调风格 upload
+    func upload(
+        _ model: RequestModel,
+        files: [UploadData],
+        parameters: [String: Any] = [:],
+        headers: [HTTPHeader] = [],
+        interceptor: RequestInterceptorProtocol? = nil,
+        completion: @escaping (CryoResult) -> Void
+    ) {
+        Task {
+            let result = await upload(
+                model,
+                files: files,
+                parameters: parameters,
+                headers: headers,
+                interceptor: interceptor
+            )
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+
+    /// 回调风格 downloadFile
+    func downloadFile(
+        _ model: DownloadModel,
+        progress: @escaping @Sendable (DownloadItem) -> Void,
+        result: @escaping @Sendable (DownloadResult) -> Void = { _ in },
+        completion: (() -> Void)? = nil
+    ) {
+        Task {
+            await downloadFile(
+                model,
+                progress: progress,
+                result: result
+            )
+            DispatchQueue.main.async {
+                completion?()
+            }
+        }
+    }
+}
+
 // MARK: - 异步过滤扩展
 extension Sequence {
     func asyncFilter(_ isIncluded: @escaping (Element) async -> Bool) async -> [Element] {
