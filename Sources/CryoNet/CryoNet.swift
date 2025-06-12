@@ -190,10 +190,13 @@ public extension CryoNet {
     ) async -> CryoResult {
         let config = await configurationActor.getConfiguration()
         let userInterceptor = interceptor ?? config.interceptor
-        let adapter = InterceptorAdapter(
-            interceptor: userInterceptor,
-            tokenManager: config.tokenManager
-        )
+        var adapter: InterceptorAdapter? = nil
+        if let _ = userInterceptor{
+            adapter = InterceptorAdapter(
+                interceptor: userInterceptor,
+                tokenManager: config.tokenManager
+            )
+        }
         let request = uploadFile(
             model,
             files: files,
@@ -216,10 +219,14 @@ public extension CryoNet {
         let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
-        let adapter = InterceptorAdapter(
-            interceptor: userInterceptor,
-            tokenManager: config.tokenManager
-        )
+        var adapter: InterceptorAdapter? = nil
+        if let _ = userInterceptor{
+            adapter = InterceptorAdapter(
+                interceptor: userInterceptor,
+                tokenManager: config.tokenManager
+            )
+        }
+        
         let request = AF.request(
             fullURL,
             method: model.method,
@@ -229,6 +236,7 @@ public extension CryoNet {
             interceptor: adapter
         ) { $0.timeoutInterval = model.overtime }
         .validate()
+        
         return CryoResult(request: request, interceptor: userInterceptor)
     }
 
