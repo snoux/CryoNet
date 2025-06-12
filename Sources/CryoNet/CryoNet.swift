@@ -176,7 +176,7 @@ private extension CryoNet {
     }
 }
 
-// MARK: - 公共接口方法
+// MARK: - 公共接口方法(async异步风格)
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
 
@@ -352,71 +352,71 @@ public extension CryoNet {
     }
 }
 
-// MARK: - 回调风格包装
+// MARK: - Combine Publisher 风格
+import Combine
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
-    /// 回调风格 request
+    // MARK: - Combine Publisher 风格 request
     func request(
-        _ model: RequestModel,
-        parameters: [String: Any]? = nil,
-        headers: [HTTPHeader] = [],
-        interceptor: RequestInterceptorProtocol? = nil,
-        completion: @escaping (CryoResult) -> Void
-    ) {
-        Task {
-            let result = await request(
-                model,
-                parameters: parameters,
-                headers: headers,
-                interceptor: interceptor
-            )
-            DispatchQueue.main.async {
-                completion(result)
+            _ model: RequestModel,
+            parameters: [String: Any]? = nil,
+            headers: [HTTPHeader] = [],
+            interceptor: RequestInterceptorProtocol? = nil
+        ) -> AnyPublisher<CryoResult, Never> {
+            Future { promise in
+                Task {
+                    let result = await self.request(
+                        model,
+                        parameters: parameters,
+                        headers: headers,
+                        interceptor: interceptor
+                    )
+                    promise(.success(result))
+                }
             }
+            .eraseToAnyPublisher()
         }
-    }
-
-    /// 回调风格 upload
+    
+    // MARK: - Combine Publisher 风格 upload
     func upload(
-        _ model: RequestModel,
-        files: [UploadData],
-        parameters: [String: Any] = [:],
-        headers: [HTTPHeader] = [],
-        interceptor: RequestInterceptorProtocol? = nil,
-        completion: @escaping (CryoResult) -> Void
-    ) {
-        Task {
-            let result = await upload(
-                model,
-                files: files,
-                parameters: parameters,
-                headers: headers,
-                interceptor: interceptor
-            )
-            DispatchQueue.main.async {
-                completion(result)
+            _ model: RequestModel,
+            files: [UploadData],
+            parameters: [String: Any] = [:],
+            headers: [HTTPHeader] = [],
+            interceptor: RequestInterceptorProtocol? = nil
+        ) -> AnyPublisher<CryoResult, Never> {
+            Future { promise in
+                Task {
+                    let result = await self.upload(
+                        model,
+                        files: files,
+                        parameters: parameters,
+                        headers: headers,
+                        interceptor: interceptor
+                    )
+                    promise(.success(result))
+                }
             }
+            .eraseToAnyPublisher()
         }
-    }
 
-    /// 回调风格 downloadFile
-    func downloadFile(
-        _ model: DownloadModel,
-        progress: @escaping @Sendable (DownloadItem) -> Void,
-        result: @escaping @Sendable (DownloadResult) -> Void = { _ in },
-        completion: (() -> Void)? = nil
-    ) {
-        Task {
-            await downloadFile(
-                model,
-                progress: progress,
-                result: result
-            )
-            DispatchQueue.main.async {
-                completion?()
+    // MARK: - Combine Publisher 风格 downloadFile
+    func download(
+            _ model: DownloadModel
+        ) -> AnyPublisher<DownloadResult, Never> {
+            let subject = PassthroughSubject<DownloadResult, Never>()
+            Task {
+                await self.downloadFile(
+                    model,
+                    progress: { _ in },
+                    result: { item in
+                        subject.send(item)
+                    }
+                )
+                subject.send(completion: .finished)
             }
+            return subject.eraseToAnyPublisher()
         }
-    }
 }
 
 // MARK: - 异步过滤扩展
