@@ -708,10 +708,10 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
 
 // MARK: - 适配器实现
 class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
-    private let interceptor: RequestInterceptorProtocol
+    private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol
     
-    init(interceptor: RequestInterceptorProtocol, tokenManager: TokenManagerProtocol) {
+    init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol) {
         self.interceptor = interceptor
         self.tokenManager = tokenManager
     }
@@ -719,8 +719,12 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     // 适配请求
     func adapt(_ urlRequest: URLRequest, for session: Session, completion: @escaping (Result<URLRequest, Error>) -> Void) {
         Task {
-            let modifiedRequest = await interceptor.interceptRequest(urlRequest, tokenManager: tokenManager)
-            completion(.success(modifiedRequest))
+            if let modifiedRequest = await interceptor?.interceptRequest(
+                urlRequest,
+                tokenManager: tokenManager
+            ){
+                completion(.success(modifiedRequest))
+            }
         }
     }
     
