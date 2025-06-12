@@ -54,13 +54,12 @@ actor ConfigurationActor {
 
 // MARK: - CryoNet 主体
 @available(macOS 10.15, iOS 13, *)
-public class CryoNet {
+public actor CryoNet {
     private let configurationActor: ConfigurationActor
 
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
         self.configurationActor = ConfigurationActor(configuration: configuration)
     }
-
     public convenience init(
         configurator: (inout CryoNetConfiguration) -> Void
     ) {
@@ -360,71 +359,62 @@ public extension CryoNet {
     }
 }
 
-// MARK: - Combine Publisher 风格
-import Combine
+// MARK: - 回调 风格
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
-    // MARK: - Combine Publisher 风格 request
+    /// 回调风格 request
     func request(
-            _ model: RequestModel,
-            parameters: [String: Any]? = nil,
-            headers: [HTTPHeader] = [],
-            interceptor: RequestInterceptorProtocol? = nil
-        ) -> AnyPublisher<CryoResult, Never> {
-            Future { promise in
-                Task {
-                    let result = await self.request(
-                        model,
-                        parameters: parameters,
-                        headers: headers,
-                        interceptor: interceptor
-                    )
-                    promise(.success(result))
-                }
-            }
-            .eraseToAnyPublisher()
+        _ model: RequestModel,
+        parameters: [String: Any]? = nil,
+        headers: [HTTPHeader] = [],
+        interceptor: RequestInterceptorProtocol? = nil,
+        completion: @escaping (CryoResult) -> Void
+    ) {
+        Task {
+            let result = await self.request(
+                model,
+                parameters: parameters,
+                headers: headers,
+                interceptor: interceptor
+            )
+            completion(result)
         }
+    }
     
-    // MARK: - Combine Publisher 风格 upload
+    /// 回调风格 upload
     func upload(
-            _ model: RequestModel,
-            files: [UploadData],
-            parameters: [String: Any] = [:],
-            headers: [HTTPHeader] = [],
-            interceptor: RequestInterceptorProtocol? = nil
-        ) -> AnyPublisher<CryoResult, Never> {
-            Future { promise in
-                Task {
-                    let result = await self.upload(
-                        model,
-                        files: files,
-                        parameters: parameters,
-                        headers: headers,
-                        interceptor: interceptor
-                    )
-                    promise(.success(result))
-                }
-            }
-            .eraseToAnyPublisher()
+        _ model: RequestModel,
+        files: [UploadData],
+        parameters: [String: Any] = [:],
+        headers: [HTTPHeader] = [],
+        interceptor: RequestInterceptorProtocol? = nil,
+        completion: @escaping (CryoResult) -> Void
+    ) {
+        Task {
+            let result = await self.upload(
+                model,
+                files: files,
+                parameters: parameters,
+                headers: headers,
+                interceptor: interceptor
+            )
+            completion(result)
         }
-
-    // MARK: - Combine Publisher 风格 downloadFile
+    }
+    
+    /// 回调风格 download
     func download(
-            _ model: DownloadModel
-        ) -> AnyPublisher<DownloadResult, Never> {
-            let subject = PassthroughSubject<DownloadResult, Never>()
-            Task {
-                await self.downloadFile(
-                    model,
-                    progress: { _ in },
-                    result: { item in
-                        subject.send(item)
-                    }
-                )
-                subject.send(completion: .finished)
-            }
-            return subject.eraseToAnyPublisher()
+        _ model: DownloadModel,
+        result: @escaping (DownloadResult) -> Void
+    ) {
+        Task {
+            await self.downloadFile(
+                model,
+                progress: { _ in },
+                result: result
+            )
         }
+    }
 }
 
 // MARK: - 异步过滤扩展
