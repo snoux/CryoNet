@@ -11,7 +11,7 @@ public struct CryoNetConfiguration: Sendable {
     public var defaultTimeout: TimeInterval
     public var maxConcurrentDownloads: Int
     public var tokenManager: TokenManagerProtocol
-    public var interceptor: RequestInterceptorProtocol
+    public var interceptor: RequestInterceptorProtocol?
 
     public init(
         basicURL: String = "",
@@ -19,7 +19,7 @@ public struct CryoNetConfiguration: Sendable {
         defaultTimeout: TimeInterval = 30,
         maxConcurrentDownloads: Int = 6,
         tokenManager: TokenManagerProtocol = DefaultTokenManager(),
-        interceptor: RequestInterceptorProtocol = DefaultInterceptor()
+        interceptor: RequestInterceptorProtocol? = nil
     ) {
         self.basicURL = basicURL
         self.basicHeaders = basicHeaders
