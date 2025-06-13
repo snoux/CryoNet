@@ -4,15 +4,36 @@ import SwiftUI
 import SwiftyJSON
 
 // MARK: - 配置对象
+
+/**
+ CryoNetConfiguration
+ 网络配置对象，提供基础URL、默认请求头、超时、最大并发下载、Token管理、拦截器等参数。
+ */
 @available(macOS 10.15, iOS 13, *)
 public struct CryoNetConfiguration: Sendable {
+    /// 基础URL
     public var basicURL: String
+    /// 基础请求头
     public var basicHeaders: [HTTPHeader]
+    /// 默认超时时间（秒）
     public var defaultTimeout: TimeInterval
+    /// 最大并发下载数
     public var maxConcurrentDownloads: Int
+    /// Token 管理器
     public var tokenManager: TokenManagerProtocol
+    /// 请求响应拦截器
     public var interceptor: RequestInterceptorProtocol?
 
+    /**
+     初始化方法
+     - Parameters:
+        - basicURL: 基础请求URL
+        - basicHeaders: 默认请求头
+        - defaultTimeout: 默认超时时间
+        - maxConcurrentDownloads: 最大并发下载数
+        - tokenManager: Token管理器
+        - interceptor: 请求拦截器
+     */
     public init(
         basicURL: String = "",
         basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
@@ -32,13 +53,28 @@ public struct CryoNetConfiguration: Sendable {
 
 
 // MARK: - CryoNet 主体
+
+/**
+ CryoNet
+ 网络请求主控制器，负责管理配置、请求和下载等功能。
+ */
 @available(macOS 10.15, iOS 13, *)
 public class CryoNet {
+    /// 当前配置
     private let configurationActor: CryoNetConfiguration
 
+    /**
+     初始化方法，传入配置
+     - Parameter configuration: 配置对象
+     */
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
         self.configurationActor = configuration
     }
+
+    /**
+     便捷初始化，支持闭包式配置
+     - Parameter configurator: 闭包修改配置
+     */
     public convenience init(
         configurator: (inout CryoNetConfiguration) -> Void
     ) {
@@ -48,13 +84,18 @@ public class CryoNet {
     }
 
     // MARK: - 配置管理 API
+
+    /// 获取当前配置
     public func getConfiguration() -> CryoNetConfiguration {
         self.configurationActor
     }
-
     
-
     // MARK: - 配置验证和调试
+
+    /**
+     校验当前拦截器配置是否生效
+     - Returns: (isValid, message) 元组
+     */
     public func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
         let currentInterceptor = self.getConfiguration().interceptor
         let interceptorType = String(describing: type(of: currentInterceptor))
@@ -65,6 +106,7 @@ public class CryoNet {
         }
     }
 
+    /// 获取当前拦截器及Token管理器类型信息
     public func getCurrentInterceptorInfo() -> String {
         let config = self.getConfiguration()
         let interceptorType = String(describing: type(of: config.interceptor))
@@ -78,17 +120,30 @@ public class CryoNet {
 
 
 // MARK: - 私有扩展方法
+
 @available(macOS 10.15, iOS 13, *)
 private extension CryoNet {
 
+    /**
+     合并请求头（去重，后面的覆盖前面的）
+     - Parameters:
+        - headers: 本次请求头
+        - config: 配置对象
+     - Returns: 合并后的 HTTPHeaders
+     */
     func mergeHeaders(_ headers: [HTTPHeader], config: CryoNetConfiguration) -> HTTPHeaders {
         let allHeaders = (config.basicHeaders + headers)
-        // 合并去重
+        // 合并去重，后面覆盖前面
         let uniqueHeaders = Dictionary(grouping: allHeaders, by: { $0.name.lowercased() })
             .map { $0.value.first! }
         return HTTPHeaders(uniqueHeaders)
     }
 
+    /**
+     将任意类型转换为 Data
+     - Parameter value: 需要转换的值
+     - Returns: Data 或 nil
+     */
     func anyToData(_ value: Any) -> Data? {
         switch value {
         case let int as Int:
@@ -108,6 +163,17 @@ private extension CryoNet {
         }
     }
 
+    /**
+     上传文件（内部方法）
+     - Parameters:
+        - model: 请求模型
+        - files: 上传文件数据
+        - parameters: 其他参数
+        - headers: 请求头
+        - interceptor: 拦截器
+        - config: CryoNet配置
+     - Returns: DataRequest
+     */
     func uploadFile(
         _ model: RequestModel,
         files: [UploadData],
@@ -145,10 +211,22 @@ private extension CryoNet {
     }
 }
 
+
 // MARK: - 公共接口方法
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
 
+    /**
+     上传文件接口
+     - Parameters:
+        - model: 请求模型
+        - files: 上传文件数组
+        - parameters: 额外参数
+        - headers: 额外请求头
+        - interceptor: 自定义拦截器
+     - Returns: CryoResult
+     */
     @discardableResult
     func upload(
         _ model: RequestModel,
@@ -177,6 +255,15 @@ public extension CryoNet {
         return CryoResult(request: request, interceptor: userInterceptor)
     }
 
+    /**
+     普通请求接口
+     - Parameters:
+        - model: 请求模型
+        - parameters: 请求参数
+        - headers: 额外请求头
+        - interceptor: 自定义拦截器
+     - Returns: CryoResult
+     */
     @discardableResult
     func request(
         _ model: RequestModel,
@@ -209,6 +296,13 @@ public extension CryoNet {
         return CryoResult(request: request, interceptor: userInterceptor)
     }
 
+    /**
+     并发/限流批量下载接口
+     - Parameters:
+        - model: 下载模型
+        - progress: 进度回调
+        - result: 单个文件下载结果回调
+     */
     @available(macOS 10.15, iOS 13, *)
     func downloadFile(
         _ model: DownloadModel,
@@ -223,7 +317,7 @@ public extension CryoNet {
             await $0.fileURL() != nil
         }
 
-        // 自定义 actor 信号量
+        // 自定义 actor 信号量，实现最大并发
         actor AsyncSemaphore {
             private var value: Int
             private var waitQueue: [CheckedContinuation<Void, Never>] = []
@@ -300,6 +394,9 @@ public extension CryoNet {
         }
     }
 
+    /**
+     信号量 actor：支持异步限流任务组
+     */
     actor AsyncSemaphore {
         private var value: Int
         private var waitQueue: [CheckedContinuation<Void, Never>] = []
@@ -329,16 +426,20 @@ public extension CryoNet {
     }
 }
 
+
 // MARK: - 流式请求扩展
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
-    /// 发起流式请求，并返回封装的 CryoStreamResult
-    /// - Parameters:
-    ///   - model: 请求模型
-    ///   - parameters: 请求参数（可选）
-    ///   - headers: 请求头（可选）
-    ///   - interceptor: 请求拦截器（可选）
-    /// - Returns: CryoStreamResult，包含 Alamofire 的 DataStreamRequest
+    /**
+     发起流式请求，并返回封装的 CryoStreamResult
+     - Parameters:
+        - model: 请求模型
+        - parameters: 请求参数（可选）
+        - headers: 请求头（可选）
+        - interceptor: 请求拦截器（可选）
+     - Returns: CryoStreamResult，包含 Alamofire 的 DataStreamRequest
+     */
     func streamRequest(
         _ model: RequestModel,
         parameters: [String: Any]? = nil,
@@ -375,7 +476,16 @@ public extension CryoNet {
 
 
 // MARK: - 异步过滤扩展
+
+/**
+ Sequence 异步过滤扩展，便于并发下载等场景用 await 过滤元素
+ */
 extension Sequence {
+    /**
+     异步过滤方法
+     - Parameter isIncluded: 异步过滤闭包
+     - Returns: 过滤后的数组
+     */
     func asyncFilter(_ isIncluded: @escaping (Element) async -> Bool) async -> [Element] {
         var result: [Element] = []
         for element in self {
