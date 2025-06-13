@@ -7,7 +7,7 @@ import Alamofire
 @available(iOS 13, *)
 public struct RequestModel {
     /// api 接口
-    var url: String
+    var path: String
     
     /// 是否拼接 BasicURL
     var applyBasicURL: Bool = true
@@ -26,14 +26,14 @@ public struct RequestModel {
     
     /// 初始化方法
     public init(
-        url: String,
+        path: String,
         applyBasicURL: Bool = true,
         method: HTTPMethod = .post,
         encoding: ParameterEncoder = .jsonDefault,
         overtime: Double = 30,
         explain: String = ""
     ) {
-        self.url = url
+        self.path = path
         self.applyBasicURL = applyBasicURL
         self.method = method
         self.encoding = encoding
@@ -45,7 +45,7 @@ public struct RequestModel {
     /// - Parameter basicURL: 基础URL
     /// - Returns: 完整URL
     public func fullURL(with basicURL: String) -> String {
-        applyBasicURL ? basicURL + url : url
+        applyBasicURL ? basicURL + path : path
     }
 }
 
@@ -57,14 +57,14 @@ extension RequestModel {
     
     /// 创建流式请求模型
     public static func streamRequest(
-        url: String,
+        path: String,
         applyBasicURL: Bool = true,
         method: HTTPMethod = .get,
         overtime: Double = 60 * 60, // 默认1小时超时
         explain: String = ""
     ) -> RequestModel {
         return RequestModel(
-            url: url,
+            path: path,
             applyBasicURL: applyBasicURL,
             method: method,
             encoding: .custom { urlRequest, _ in
