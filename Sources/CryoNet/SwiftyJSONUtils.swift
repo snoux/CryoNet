@@ -1,7 +1,7 @@
 import Foundation
 import SwiftyJSON
 
-// MARK: - SwiftyJSON 工具扩展 (替代原 JSONParser)
+// MARK: - SwiftyJSON 工具扩展
 public enum SwiftyJSONUtils {
     
     // MARK: - 解码方法（反序列化）

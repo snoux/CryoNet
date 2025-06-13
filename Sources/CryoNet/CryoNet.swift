@@ -30,35 +30,14 @@ public struct CryoNetConfiguration: Sendable {
     }
 }
 
-// MARK: - 线程安全配置管理（使用 actor）
-@available(macOS 10.15, iOS 13, *)
-actor ConfigurationActor {
-    private var configuration: CryoNetConfiguration
-
-    init(configuration: CryoNetConfiguration) {
-        self.configuration = configuration
-    }
-
-    func getConfiguration() -> CryoNetConfiguration {
-        configuration
-    }
-
-    func setConfiguration(_ config: CryoNetConfiguration) {
-        configuration = config
-    }
-
-    func updateConfiguration(_ update: (inout CryoNetConfiguration) -> Void) {
-        update(&configuration)
-    }
-}
 
 // MARK: - CryoNet 主体
 @available(macOS 10.15, iOS 13, *)
-public actor CryoNet {
-    private let configurationActor: ConfigurationActor
+public class CryoNet {
+    private let configurationActor: CryoNetConfiguration
 
     public init(configuration: CryoNetConfiguration = CryoNetConfiguration()) {
-        self.configurationActor = ConfigurationActor(configuration: configuration)
+        self.configurationActor = configuration
     }
     public convenience init(
         configurator: (inout CryoNetConfiguration) -> Void
@@ -68,26 +47,16 @@ public actor CryoNet {
         self.init(configuration: configuration)
     }
 
-    // MARK: - 配置管理 API（async）
-
-    public func getConfiguration() async -> CryoNetConfiguration {
-        await configurationActor.getConfiguration()
+    // MARK: - 配置管理 API
+    public func getConfiguration() -> CryoNetConfiguration {
+        self.configurationActor
     }
 
-    public func setConfiguration(_ config: CryoNetConfiguration) async {
-        await configurationActor.setConfiguration(config)
-    }
-
-    public func updateConfiguration(
-        _ update: @escaping (inout CryoNetConfiguration) -> Void
-    ) async {
-        await configurationActor.updateConfiguration(update)
-    }
+    
 
     // MARK: - 配置验证和调试
-
-    public func validateInterceptorConfiguration() async -> (isValid: Bool, message: String) {
-        let currentInterceptor = await configurationActor.getConfiguration().interceptor
+    public func validateInterceptorConfiguration() -> (isValid: Bool, message: String) {
+        let currentInterceptor = self.getConfiguration().interceptor
         let interceptorType = String(describing: type(of: currentInterceptor))
         if interceptorType.contains("DefaultInterceptor") {
             return (false, "当前使用默认拦截器，可能配置未生效")
@@ -96,8 +65,8 @@ public actor CryoNet {
         }
     }
 
-    public func getCurrentInterceptorInfo() async -> String {
-        let config = await configurationActor.getConfiguration()
+    public func getCurrentInterceptorInfo() -> String {
+        let config = self.getConfiguration()
         let interceptorType = String(describing: type(of: config.interceptor))
         let tokenManagerType = String(describing: type(of: config.tokenManager))
         return """
@@ -106,6 +75,7 @@ public actor CryoNet {
         """
     }
 }
+
 
 // MARK: - 私有扩展方法
 @available(macOS 10.15, iOS 13, *)
@@ -175,7 +145,7 @@ private extension CryoNet {
     }
 }
 
-// MARK: - 公共接口方法(async异步风格)
+// MARK: - 公共接口方法
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
 
@@ -186,8 +156,8 @@ public extension CryoNet {
         parameters: [String: Any] = [:],
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
-    ) async -> CryoResult {
-        let config = await configurationActor.getConfiguration()
+    ) -> CryoResult {
+        let config = self.getConfiguration()
         let userInterceptor = interceptor ?? config.interceptor
         var adapter: InterceptorAdapter? = nil
         if let _ = userInterceptor{
@@ -213,8 +183,8 @@ public extension CryoNet {
         parameters: [String: Any]? = nil,
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
-    ) async -> CryoResult {
-        let config = await configurationActor.getConfiguration()
+    ) -> CryoResult {
+        let config = self.getConfiguration()
         let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
@@ -245,7 +215,7 @@ public extension CryoNet {
         progress: @escaping @Sendable (DownloadItem) -> Void,
         result: @escaping @Sendable (DownloadResult) -> Void = { _ in }
     ) async {
-        let config = await configurationActor.getConfiguration()
+        let config = self.getConfiguration()
         let maxConcurrent = config.maxConcurrentDownloads
 
         // 过滤掉无效下载项
@@ -359,63 +329,50 @@ public extension CryoNet {
     }
 }
 
-// MARK: - 回调 风格
+// MARK: - 流式请求扩展
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
-    /// 回调风格 request
-    func request(
+    /// 发起流式请求，并返回封装的 CryoStreamResult
+    /// - Parameters:
+    ///   - model: 请求模型
+    ///   - parameters: 请求参数（可选）
+    ///   - headers: 请求头（可选）
+    ///   - interceptor: 请求拦截器（可选）
+    /// - Returns: CryoStreamResult，包含 Alamofire 的 DataStreamRequest
+    func streamRequest(
         _ model: RequestModel,
         parameters: [String: Any]? = nil,
         headers: [HTTPHeader] = [],
-        interceptor: RequestInterceptorProtocol? = nil,
-        completion: @escaping (CryoResult) -> Void
-    ) {
-        Task {
-            let result = await self.request(
-                model,
-                parameters: parameters,
-                headers: headers,
-                interceptor: interceptor
-            )
-            completion(result)
-        }
-    }
-    
-    /// 回调风格 upload
-    func upload(
-        _ model: RequestModel,
-        files: [UploadData],
-        parameters: [String: Any] = [:],
-        headers: [HTTPHeader] = [],
-        interceptor: RequestInterceptorProtocol? = nil,
-        completion: @escaping (CryoResult) -> Void
-    ) {
-        Task {
-            let result = await self.upload(
-                model,
-                files: files,
-                parameters: parameters,
-                headers: headers,
-                interceptor: interceptor
-            )
-            completion(result)
-        }
-    }
-    
-    /// 回调风格 download
-    func download(
-        _ model: DownloadModel,
-        result: @escaping (DownloadResult) -> Void
-    ) {
-        Task {
-            await self.downloadFile(
-                model,
-                progress: { _ in },
-                result: result
+        interceptor: RequestInterceptorProtocol? = nil
+    ) -> CryoStreamResult {
+        let config = getConfiguration()
+        let fullURL = model.fullURL(with: config.basicURL)
+        let mergedHeaders = mergeHeaders(headers, config: config)
+        let userInterceptor = interceptor ?? config.interceptor
+
+        // 构造适配器（如果有自定义拦截器）
+        var adapter: InterceptorAdapter? = nil
+        if let userInterceptor = userInterceptor {
+            adapter = InterceptorAdapter(
+                interceptor: userInterceptor,
+                tokenManager: config.tokenManager
             )
         }
+        
+        // 构造流式请求
+        let request = AF.streamRequest(
+            fullURL,
+            method: model.method,
+            headers: mergedHeaders,
+            automaticallyCancelOnStreamError: false,
+            interceptor: adapter
+        )
+        
+        // 返回 CryoStreamResult，只传入 request
+        return CryoStreamResult(request: request)
     }
 }
+
 
 // MARK: - 异步过滤扩展
 extension Sequence {

@@ -83,7 +83,7 @@ extension CryoResult {
     /// - Parameter progress: 进度闭包
     /// - Returns: 当前 CryoResult 对象
     @discardableResult
-    public func progress(_ progress: @escaping (Double) -> Void) -> CryoResult {
+    public func progress(_ progress: @escaping (Double) -> Void) -> Self {
         request.uploadProgress { uploadProgress in
             progress(uploadProgress.fractionCompleted)
         }
@@ -138,7 +138,7 @@ extension CryoResult {
     public func responseData(
         success: @escaping (Data) -> Void,
         failed: @escaping (CryoError) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         handleResponse { response in
             switch response.result {
             case .success(let data):
@@ -157,7 +157,7 @@ extension CryoResult {
     public func responseJSON(
         success: @escaping (JSON) -> Void,
         failed: @escaping (CryoError) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         handleResponse { response in
             switch response.result {
             case .success(let data):
@@ -184,7 +184,7 @@ extension CryoResult {
         type: T.Type,
         success: @escaping (T) -> Void,
         failed: @escaping (CryoError) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         handleResponse { response in
             switch response.result {
             case .success(let data):
@@ -214,7 +214,7 @@ extension CryoResult {
         type: T.Type,
         success: @escaping ([T]) -> Void,
         failed: @escaping (CryoError) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         handleResponse { response in
             switch response.result {
             case .success(let data):
@@ -257,7 +257,7 @@ extension CryoResult {
         type: T.Type,
         success: @escaping (T) -> Void,
         failed: @escaping (String) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         self.request.response { response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
@@ -312,7 +312,7 @@ extension CryoResult {
         type: T.Type,
         success: @escaping (T) -> Void,
         failed: @escaping (String) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         self.request.response { response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
@@ -365,7 +365,7 @@ extension CryoResult {
     public func interceptJSON(
         success: @escaping (JSON) -> Void,
         failed: @escaping (String) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         self.request.response { response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
@@ -419,7 +419,7 @@ extension CryoResult {
         type: T.Type,
         success: @escaping ([T]) -> Void,
         failed: @escaping (String) -> Void = { _ in }
-    ) -> CryoResult {
+    ) -> Self {
         self.request.response { response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data

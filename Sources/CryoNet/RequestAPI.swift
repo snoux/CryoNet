@@ -1,6 +1,86 @@
 import Foundation
 import Alamofire
 
+// MARK: - 定义请求模型
+
+/// 请求模型
+@available(iOS 13, *)
+public struct RequestModel {
+    /// api 接口
+    var url: String
+    
+    /// 是否拼接 BasicURL
+    var applyBasicURL: Bool = true
+
+    /// 请求方式
+    var method: HTTPMethod = .get
+    
+    /// 参数编码格式(默认json)
+    var encoding: ParameterEncoder = .jsonDefault
+    
+    /// 超时时间
+    var overtime: Double
+    
+    /// 接口说明
+    var explain: String = ""
+    
+    /// 初始化方法
+    public init(
+        url: String,
+        applyBasicURL: Bool = true,
+        method: HTTPMethod = .post,
+        encoding: ParameterEncoder = .jsonDefault,
+        overtime: Double = 30,
+        explain: String = ""
+    ) {
+        self.url = url
+        self.applyBasicURL = applyBasicURL
+        self.method = method
+        self.encoding = encoding
+        self.overtime = overtime
+        self.explain = explain
+    }
+    
+    /// 获取完整URL
+    /// - Parameter basicURL: 基础URL
+    /// - Returns: 完整URL
+    public func fullURL(with basicURL: String) -> String {
+        applyBasicURL ? basicURL + url : url
+    }
+}
+
+
+// MARK: - 扩展流式请求 
+extension RequestModel {
+    /// 流式响应处理器
+    public typealias StreamHandler = @Sendable (Result<Data, Error>) -> Void
+    
+    /// 创建流式请求模型
+    public static func streamRequest(
+        url: String,
+        applyBasicURL: Bool = true,
+        method: HTTPMethod = .get,
+        overtime: Double = 60 * 60, // 默认1小时超时
+        explain: String = ""
+    ) -> RequestModel {
+        return RequestModel(
+            url: url,
+            applyBasicURL: applyBasicURL,
+            method: method,
+            encoding: .custom { urlRequest, _ in
+                var request = try URLEncoding.default.encode(urlRequest, with: nil)
+                // 设置流式请求头
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                request.timeoutInterval = overtime
+                return request
+            },
+            overtime: overtime,
+            explain: explain
+        )
+    }
+}
+
 // MARK: - 自定义 ParameterEncoding
 /// 自定义 ParameterEncoding
 public struct CustomParameterEncoding: ParameterEncoding {
@@ -65,51 +145,15 @@ public enum ParameterEncoder {
     }
 }
 
-/// 请求模型
-@available(iOS 13, *)
-public struct RequestModel {
-    /// api 接口
-    var url: String
-    
-    /// 是否拼接 BasicURL
-    var applyBasicURL: Bool = true
 
-    /// 请求方式
-    var method: HTTPMethod = .get
-    
-    /// 参数编码格式(默认json)
-    var encoding: ParameterEncoder = .jsonDefault
-    
-    /// 超时时间
-    var overtime: Double
-    
-    /// 接口说明
-    var explain: String = ""
-    
-    /// 初始化方法
-    public init(
-        url: String,
-        applyBasicURL: Bool = true,
-        method: HTTPMethod = .post,
-        encoding: ParameterEncoder = .jsonDefault,
-        overtime: Double = 30,
-        explain: String = ""
-    ) {
-        self.url = url
-        self.applyBasicURL = applyBasicURL
-        self.method = method
-        self.encoding = encoding
-        self.overtime = overtime
-        self.explain = explain
-    }
-    
-    /// 获取完整URL
-    /// - Parameter basicURL: 基础URL
-    /// - Returns: 完整URL
-    public func fullURL(with basicURL: String) -> String {
-        applyBasicURL ? basicURL + url : url
-    }
-}
+
+// 添加流式模型转换类型
+//public enum StreamModelType {
+//    case jsonObject
+//    case jsonArray
+//    case sseEvent
+//    case lineDelimited
+//}
 
 /// 上传文件参数
 @available(iOS 13 ,*)
