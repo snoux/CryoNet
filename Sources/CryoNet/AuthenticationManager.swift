@@ -99,126 +99,6 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
     }
 }
 
-// MARK: - 嵌套响应结构配置
-/**
- 支持 result.data 这种嵌套结构的响应体解包。
- */
-public struct NestedResponseStructure: ResponseStructureConfig {
-    public let codeKey: String
-    public let messageKey: String
-    public let dataKey: String
-    public let successCode: Int
-    public let resultKey: String
-    
-    /// 初始化方法
-    public init(
-        codeKey: String,
-        messageKey: String,
-        dataKey: String,
-        successCode: Int,
-        resultKey: String
-    ) {
-        self.codeKey = codeKey
-        self.messageKey = messageKey
-        self.dataKey = dataKey
-        self.successCode = successCode
-        self.resultKey = resultKey
-    }
-    
-    /// 判断响应是否成功
-    public func isSuccess(json: JSON) -> Bool {
-        return json[codeKey].intValue == successCode
-    }
-    
-    /// 嵌套结构提取数据
-    public func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
-        let resultData = json[resultKey]
-        if !resultData.exists() || resultData.type == .null {
-            return .success(originalData)
-        }
-        let targetData = resultData[dataKey]
-        if !targetData.exists() || targetData.type == .null {
-            do {
-                return .success(try resultData.rawData())
-            } catch {
-                return .success(originalData)
-            }
-        }
-        do {
-            let validData: Data
-            switch targetData.type {
-            case .dictionary, .array:
-                validData = try targetData.rawData()
-            case .string:
-                validData = Data(targetData.stringValue.utf8)
-            case .number, .bool:
-                let stringValue = targetData.stringValue
-                validData = Data(stringValue.utf8)
-            default:
-                return .success(originalData)
-            }
-            return .success(validData)
-        } catch {
-            return .failure(NSError(
-                domain: "DataError",
-                code: -1004,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "数据转换失败",
-                    NSUnderlyingErrorKey: error
-                ]
-            ))
-        }
-    }
-    
-    /// 获取配置信息（便于调试）
-    public func getConfigInfo() -> [String: Any] {
-        return [
-            "codeKey": codeKey,
-            "messageKey": messageKey,
-            "dataKey": dataKey,
-            "successCode": successCode,
-            "resultKey": resultKey
-        ]
-    }
-}
-
-// MARK: - 响应结构配置工厂方法
-/**
- 提供标准与嵌套结构的工厂方法。
- */
-public extension ResponseStructureConfig {
-    /// 创建标准响应结构配置
-    static func standard(
-        codeKey: String = "code",
-        messageKey: String = "msg",
-        dataKey: String = "data",
-        successCode: Int = 200
-    ) -> ResponseStructureConfig {
-        DefaultResponseStructure(
-            codeKey: codeKey,
-            messageKey: messageKey,
-            dataKey: dataKey,
-            successCode: successCode
-        )
-    }
-    
-    /// 创建嵌套响应结构配置
-    static func nested(
-        codeKey: String,
-        messageKey: String,
-        resultKey: String,
-        dataKey: String,
-        successCode: Int
-    ) -> ResponseStructureConfig {
-        NestedResponseStructure(
-            codeKey: codeKey,
-            messageKey: messageKey,
-            dataKey: dataKey,
-            successCode: successCode,
-            resultKey: resultKey
-        )
-    }
-}
 
 // MARK: - Token 管理协议与默认实现
 /**
@@ -403,12 +283,15 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         var config: [String: Any] = [
             "interceptorType": String(describing: type(of: self))
         ]
-        if let defaultConfig = responseConfig as? DefaultResponseStructure {
+        if let defaultConfig = responseConfig as? DefaultResponseStructure{
             config.merge(defaultConfig.getConfigInfo()) { (_, new) in new }
-        } else if let nestedConfig = responseConfig as? NestedResponseStructure {
-            config.merge(nestedConfig.getConfigInfo()) { (_, new) in new }
-        } else {
-            config["responseConfigType"] = String(describing: type(of: responseConfig))
+        }else{
+            let value =  [
+                "codeKey": responseConfig.codeKey,
+                "messageKey": responseConfig.messageKey,
+                "dataKey": responseConfig.dataKey,
+                "successCode": responseConfig.successCode
+            ] as [String : Any]
         }
         return config
     }
