@@ -2,25 +2,6 @@ import Foundation
 import Alamofire
 import SwiftyJSON
 
-// MARK: - 响应结构配置协议
-/**
- 响应结构配置协议，定义了如何从响应中解析通用结构体（如 code/msg/data）。
- */
-public protocol ResponseStructureConfig: Sendable {
-    /// 状态码字段的key
-    var codeKey: String { get }
-    /// 消息字段的key
-    var messageKey: String { get }
-    /// 数据字段的key
-    var dataKey: String { get }
-    /// 成功状态码
-    var successCode: Int { get }
-    
-    /// 判断响应是否成功
-    func isSuccess(json: JSON) -> Bool
-    /// 从JSON中提取数据
-    func extractData(from json: JSON, originalData: Data) -> Result<Data, Error>
-}
 
 // MARK: - 默认响应结构配置
 /**
@@ -100,37 +81,6 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
 }
 
 
-// MARK: - Token 管理协议与默认实现
-/**
- Token 管理协议, 可自定义实现或继承 DefaultTokenManager。
- */
-public protocol TokenManagerProtocol: Sendable {
-    /// 获取当前 Token
-    func getToken() async -> String?
-    /// 设置新的 Token
-    func setToken(_ newToken: String) async
-    /// 刷新 Token（如支持则返回新 token）
-    func refreshToken() async -> String?
-}
-
-// MARK: - 封装 token 状态的线程安全 actor
-/**
- 线程安全的 token 存储。
- */
-actor TokenStorageActor {
-    private var token: String?
-    
-    /// 获取 token
-    func get() -> String? {
-        token
-    }
-    
-    /// 设置 token
-    func set(_ newToken: String?) {
-        token = newToken
-    }
-}
-
 // MARK: - 可继承、线程安全的默认实现
 /**
  默认 Token 管理器，线程安全，支持手动和自动刷新。
@@ -160,18 +110,7 @@ open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
     }
 }
 
-// MARK: - 拦截器协议与默认实现
-/**
- 拦截器协议，支持请求与响应拦截。
- */
-public protocol RequestInterceptorProtocol: Sendable {
-    /// 请求拦截（如注入 token）
-    func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest
-    /// 响应拦截（只返回业务数据）
-    func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
-    /// 响应拦截（返回完整响应数据）
-    func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
-}
+
 
 /// 拦截器配置查询协议
 public protocol InterceptorConfigProvider {
@@ -292,6 +231,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
                 "dataKey": responseConfig.dataKey,
                 "successCode": responseConfig.successCode
             ] as [String : Any]
+            config.merge(value) { (_, new) in new }
         }
         return config
     }
