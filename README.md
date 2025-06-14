@@ -63,10 +63,10 @@ let net = CryoNet { config in
 
 ```swift
 struct API_User {
-    static let getUser = RequestModel(url: "/user", method: .get, explain: "获取用户信息")
+    static let getUser = RequestModel(path: "/user", method: .get, explain: "获取用户信息")
 }
 struct API_Login {
-    static let login = RequestModel(url: "/login", method: .get, explain: "登录接口")
+    static let login = RequestModel(path: "/login", method: .get, explain: "登录接口")
 }
 ```
 
