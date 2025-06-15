@@ -14,6 +14,8 @@ public protocol JSONParseable {
     init?(json: JSON)
 }
 
+
+
 // MARK: - SwiftyJSON 模型转换扩展
 
 public extension JSON {
@@ -231,66 +233,3 @@ public extension JSON {
     }
 }
 
-// MARK: - 示例模型实现
-
-/*
- 示例如何实现 JSONParseable 协议并结合 SwiftyJSON 使用
-
-struct User: JSONParseable {
-    let id: Int
-    let name: String
-    let email: String?
-    let isActive: Bool
-    let profile: Profile?
-    
-    init?(json: JSON) {
-        // 必填字段校验
-        guard json["id"].type == .number else { return nil }
-        
-        self.id = json.int("id")
-        self.name = json.string("name")
-        self.email = json.optionalString("email")
-        self.isActive = json.bool("isActive")
-        
-        // 嵌套对象解析
-        if json["profile"].exists() {
-            self.profile = Profile(json: json["profile"])
-        } else {
-            self.profile = nil
-        }
-    }
-}
-
-struct Profile: JSONParseable {
-    let bio: String
-    let age: Int
-    
-    init?(json: JSON) {
-        self.bio = json.string("bio")
-        self.age = json.int("age")
-    }
-}
-
-// 使用示例
-let jsonString = """
-{
-    "id": 1,
-    "name": "John Doe",
-    "email": "john@example.com",
-    "isActive": true,
-    "profile": {
-        "bio": "Software Developer",
-        "age": 30
-    }
-}
-"""
-
-if let data = jsonString.data(using: .utf8),
-   let json = try? JSON(data: data),
-   let user = json.toModel(User.self) {
-    print("User: \(user.name), Email: \(user.email ?? "N/A")")
-    if let profile = user.profile {
-        print("Bio: \(profile.bio), Age: \(profile.age)")
-    }
-}
-*/

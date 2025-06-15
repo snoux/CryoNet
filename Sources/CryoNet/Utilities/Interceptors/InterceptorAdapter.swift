@@ -112,12 +112,6 @@ open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
 
 
 
-/// 拦截器配置查询协议
-public protocol InterceptorConfigProvider {
-    /// 获取拦截器配置信息，便于调试和业务错误处理
-    func getInterceptorConfig() -> [String: Any]
-}
-
 // MARK: - 默认拦截器(允许继承)
 /**
  默认实现，支持 token 注入、业务异常处理、结构化错误输出，支持响应结构配置定制。
@@ -428,6 +422,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 }
 
+
+
 // MARK: - Alamofire 适配器实现
 /**
  Alamofire RequestInterceptor 适配器，自动注入 token 并处理 401 自动刷新。
@@ -436,6 +432,10 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol
     
+    /// 初始化适配器
+    /// - Parameters:
+    ///   - interceptor: 拦截器
+    ///   - tokenManager: tokenManager
     init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol) {
         self.interceptor = interceptor
         self.tokenManager = tokenManager

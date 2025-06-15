@@ -1,7 +1,7 @@
 import Foundation
 import Alamofire
 
-// MARK: - 拦截器协议与默认实现
+// MARK: - 拦截器协议
 /**
  拦截器协议，支持请求与响应拦截。
  */
@@ -12,4 +12,11 @@ public protocol RequestInterceptorProtocol: Sendable {
     func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
     /// 响应拦截（返回完整响应数据）
     func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error>
+}
+
+
+/// 拦截器配置查询协议
+public protocol InterceptorConfigProvider {
+    /// 获取拦截器配置信息，便于调试和业务错误处理
+    func getInterceptorConfig() -> [String: Any]
 }
