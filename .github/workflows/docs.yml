@@ -1,0 +1,28 @@
+name: Generate & Deploy swift-doc
+
+on:
+  push:
+    branches:
+      - main  # 每次推送到 main 分支时触发
+
+jobs:
+  build-docs:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install swift-doc
+        run: |
+          brew install swiftdocorg/formulae/swift-doc
+
+      - name: Generate Documentation
+        run: |
+          swift-doc generate Sources/ --output docs --format html --module-name CryoNet
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
