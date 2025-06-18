@@ -5,10 +5,17 @@ import SwiftyJSON
 
 // MARK: - 配置对象
 
-/**
- CryoNetConfiguration
- 网络配置对象，提供基础URL、默认请求头、超时、最大并发下载、Token管理、拦截器等参数。
- */
+/// 网络配置对象
+///
+/// 提供基础URL、默认请求头、超时、最大并发下载、Token管理、拦截器等参数。
+///
+///
+/// 示例用法 ：
+/// ```swift
+/// ```
+///
+/// - Note:
+/// 配置后所有发送请求会默认拼接`basicURL`、`basicHeaders`
 @available(macOS 10.15, iOS 13, *)
 public struct CryoNetConfiguration: Sendable {
     /// 基础URL
@@ -24,16 +31,18 @@ public struct CryoNetConfiguration: Sendable {
     /// 请求响应拦截器
     public var interceptor: RequestInterceptorProtocol?
 
-    /**
-     初始化方法
-     - Parameters:
-        - basicURL: 基础请求URL
-        - basicHeaders: 默认请求头
-        - defaultTimeout: 默认超时时间
-        - maxConcurrentDownloads: 最大并发下载数
-        - tokenManager: Token管理器
-        - interceptor: 请求拦截器
-     */
+    /// 初始化方法
+    /// - Parameters:
+    ///   - basicURL: 基础请求地址
+    ///   - basicHeaders: 基础请求 Headers
+    ///   - defaultTimeout: 默认超时时间
+    ///   - maxConcurrentDownloads: 最大并发下载量
+    ///   - tokenManager: token管理
+    ///   - interceptor: 拦截器
+    ///
+    /// 使用示例
+    ///
+    ///
     public init(
         basicURL: String = "",
         basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
