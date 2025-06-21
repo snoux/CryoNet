@@ -18,6 +18,7 @@ public struct DownloadModel {
     /// 下载项数组
     public var items: [DownloadItem]
     /// 全局保存目录（优先级低于每个item的filePath）
+    /// 未设置使用系统默认目录（如 iOS 的 Documents 或 macOS 的 Downloads
     public var defaultSaveDirectory: String?
     /// 是否保存到相册（优先级低于每个item的isSaveToAlbum）
     public var isSaveToAlbum: Bool
