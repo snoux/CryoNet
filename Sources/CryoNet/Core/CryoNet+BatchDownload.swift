@@ -23,7 +23,7 @@ import Alamofire
 /// ```
 ///
 /// - Note:
-///   - 该方法底层调用 `BatchDownloadManager`，并返回一个空的 `CryoResult` 仅用于链式调用（如 .progress()）。
+///   - 该方法底层调用 `BatchDownloadManager`。
 ///   - 进度与完成回调针对每个下载项分别触发。
 ///
 /// - SeeAlso: ``DownloadModel``, ``DownloadItem``, ``BatchDownloadManager``
@@ -40,13 +40,11 @@ public extension CryoNet {
         _ model: DownloadModel,
         progress: ((DownloadItem, Double) -> Void)? = nil,
         completion: ((DownloadItem, Result<URL, Error>) -> Void)? = nil
-    ) -> CryoResult {
+    ) {
         BatchDownloadManager.shared.startBatchDownload(
             model: model,
             progress: progress,
             completion: completion
         )
-        // CryoResult只是为了链式风格，这里返回一个空的DataRequest
-        return CryoResult(request: AF.request("about:blank"))
     }
 }
