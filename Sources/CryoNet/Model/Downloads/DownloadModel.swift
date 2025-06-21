@@ -1,34 +1,20 @@
 import Foundation
 import Alamofire
-/**
- 下载模型 DownloadModel
- 用于批量下载，包含保存路径和所有下载项。
- */
-@available(iOS 13 ,*)
-public struct DownloadModel {
-    /// 文件保存目录（可选）
-    public var savePath: String?
-    /// 下载项数组
-    public var models: [DownloadItem]
-    
-    /// 保存目录的 URL
-    public var savePathURL: URL? {
-        if savePath != nil {
-            return URL(string: savePath!)
-        } else {
-            return nil
-        }
-    }
 
-    /**
-     初始化方法
-     - Parameters:
-        - savePath: 保存目录
-        - models: 下载项列表
-     */
-    public init(savePath: String?, models: [DownloadItem]) {
-        self.savePath = savePath
-        self.models = models
+@available(iOS 13, *)
+public struct DownloadModel {
+    /// 下载项数组
+    public var items: [DownloadItem]
+    /// 全局保存目录（优先级低于每个item的filePath）
+    public var defaultSaveDirectory: String?
+    /// 是否保存到相册（优先级低于每个item的isSaveToAlbum）
+    public var isSaveToAlbum: Bool
+
+    public init(items: [DownloadItem],
+                defaultSaveDirectory: String? = nil,
+                isSaveToAlbum: Bool = false) {
+        self.items = items
+        self.defaultSaveDirectory = defaultSaveDirectory
+        self.isSaveToAlbum = isSaveToAlbum
     }
 }
-
