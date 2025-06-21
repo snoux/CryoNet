@@ -549,21 +549,3 @@ public extension CryoNet {
     }
 }
 
-
-// MARK: - 异步过滤扩展
-
-/// Sequence 异步过滤扩展，便于并发下载等场景用 await 过滤元素
-extension Sequence {
-    ///异步过滤方法
-    /// - Parameter isIncluded: 异步过滤闭包
-    /// - Returns: 过滤后的数组
-    func asyncFilter(_ isIncluded: @escaping (Element) async -> Bool) async -> [Element] {
-        var result: [Element] = []
-        for element in self {
-            if await isIncluded(element) {
-                result.append(element)
-            }
-        }
-        return result
-    }
-}

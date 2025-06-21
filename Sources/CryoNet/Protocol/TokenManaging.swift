@@ -1,9 +1,20 @@
 import Foundation
 import SwiftyJSON
+
 // MARK: - Token 管理协议与默认实现
-/**
- Token 管理协议, 可自定义实现或继承 DefaultTokenManager。
- */
+
+/// `TokenManagerProtocol` 定义访问和管理 Token 的接口，支持异步获取、设置和刷新。
+///
+/// 可自定义实现以适配不同的 Token 存储、刷新逻辑（如 OAuth、JWT、API Key 等）。
+///
+/// ### 使用示例
+/// ```swift
+/// class MyTokenManager: TokenManagerProtocol {
+///     func getToken() async -> String? { ... }
+///     func setToken(_ newToken: String) async { ... }
+///     func refreshToken() async -> String? { ... }
+/// }
+/// ```
 public protocol TokenManagerProtocol: Sendable {
     /// 获取当前 Token
     func getToken() async -> String?
@@ -14,10 +25,7 @@ public protocol TokenManagerProtocol: Sendable {
 }
 
 
-// MARK: - 封装 token 状态的线程安全 actor
-/**
- 线程安全的 token 存储。
- */
+/// 线程安全的 token 存储 Actor，封装单实例 Token。
 actor TokenStorageActor {
     private var token: String?
     

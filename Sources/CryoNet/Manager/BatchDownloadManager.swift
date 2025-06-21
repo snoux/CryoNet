@@ -143,7 +143,13 @@ public class BatchDownloadManager {
     public static func saveFileToAlbum(fileURL: URL, completion: @escaping (Result<Void, Error>) -> Void) {
         #if os(iOS)
         PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized || status == .limited else {
+            let authorized: Bool
+            if #available(iOS 14, *) {
+                authorized = status == .authorized || status == .limited
+            } else {
+                authorized = status == .authorized
+            }
+            guard authorized else {
                 completion(.failure(NSError(domain: "NoAlbumPermission", code: -1)))
                 return
             }

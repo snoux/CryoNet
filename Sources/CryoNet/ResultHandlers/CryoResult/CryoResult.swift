@@ -4,9 +4,17 @@ import Alamofire
 
 // MARK: - CryoResult 核心功能
 
-/**
- CryoResult 封装了 Alamofire 的数据请求处理功能，提供同步与异步响应、模型解码、拦截器集成等能力。
- */
+/// `CryoResult` 封装了 Alamofire 的数据请求处理功能，支持同步与异步响应回调、模型解码、拦截器集成等能力。
+///
+/// 常用于链式响应处理，支持 JSON、模型、模型数组等多种格式，便于统一管理请求响应逻辑。
+///
+/// ### 使用示例
+/// ```swift
+/// cryoNet.request(model)
+///     .responseJSON { json in ... }
+///     .responseModel(type: User.self) { user in ... }
+///     .interceptModel(type: User.self) { user in ... }
+/// ```
 @available(macOS 10.15, iOS 13, *)
 public struct CryoResult: Sendable {
     /// Alamofire 请求对象
@@ -14,12 +22,10 @@ public struct CryoResult: Sendable {
     /// 请求拦截器 (可选)
     let interceptor: RequestInterceptorProtocol?
 
-    /**
-     初始化方法
-     - Parameters:
-        - request: 数据请求对象
-        - interceptor: 拦截器
-     */
+    /// 初始化
+    /// - Parameters:
+    ///   - request: 数据请求对象
+    ///   - interceptor: 拦截器
     init(
         request: DataRequest,
         interceptor: RequestInterceptorProtocol? = nil
@@ -28,25 +34,22 @@ public struct CryoResult: Sendable {
         self.interceptor = interceptor
     }
 
-    /**
-     调试请求日志（仅 DEBUG 模式打印）
-     - Parameters:
-        - data: 响应数据
-        - error: 错误信息
-        - fromInterceptor: 是否来源于拦截器
-        - interceptorInfo: 拦截器配置信息
-        - noInterceptor: 是否未配置拦截器
-     */
+    /// 调试请求日志（仅 DEBUG 模式打印）
+    /// - Parameters:
+    ///   - data: 响应数据
+    ///   - error: 错误信息
+    ///   - fromInterceptor: 是否来源于拦截器
+    ///   - interceptorInfo: 拦截器配置信息
+    ///   - noInterceptor: 是否未配置拦截器
     internal func debugRequestLog(_ data: Data?, error: String? = nil, fromInterceptor: Bool, interceptorInfo: [String: Any]? = nil, noInterceptor: Bool = false) {
         #if DEBUG
         guard let request = self.request.request else {
             debugLog("无效的请求,请检查 \(error ?? "")")
             return
         }
-
         let responseType = fromInterceptor ? "响应拦截器数据:" : "响应完整数据:"
-        let separator = "\n\n\n\n⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️\n"
-        let endMark = "\n⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️\n\n\n\n"
+        let separator = "\n\n\n\n⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️⬇️"
+        let endMark = "\n⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️⬆️\n"
 
         let urlString = request.url?.absoluteString ?? "未知URL"
         let httpBodyInfo = request.httpBody.flatMap { "\nhttpBody 参数: \(SwiftyJSONUtils.dataToPrettyJSONString($0))" } ?? ""
@@ -85,10 +88,8 @@ public struct CryoResult: Sendable {
         #endif
     }
 
-    /**
-     打印调试日志
-     - Parameter message: 日志内容
-     */
+    /// 打印调试日志（仅 DEBUG）
+    /// - Parameter message: 日志内容
     private func debugLog(_ message: Any) {
         #if DEBUG
         print(message)
@@ -100,11 +101,9 @@ public struct CryoResult: Sendable {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-    /**
-     上传进度回调
-     - Parameter progress: 进度闭包，返回值为 [0,1] 的 Double
-     - Returns: 当前 CryoResult 对象
-     */
+    /// 上传进度回调
+    /// - Parameter progress: 进度闭包（0~1）
+    /// - Returns: self
     @discardableResult
     public func progress(_ progress: @escaping (Double) -> Void) -> Self {
         request.uploadProgress { uploadProgress in
@@ -116,10 +115,7 @@ extension CryoResult {
 
 // MARK: - 错误统一处理协议
 
-/**
- CryoError
- 统一错误协议，所有网络相关错误均实现该协议，便于统一处理
- */
+/// `CryoError` 统一错误协议，所有网络相关错误均实现该协议，便于统一处理
 public protocol CryoError: Error {
     var localizedDescription: String { get }
 }
@@ -127,37 +123,19 @@ public protocol CryoError: Error {
 extension AFError: CryoError {}
 extension DecodingError: CryoError {}
 
-// MARK: - 通用错误包装器
-
-/**
- 通用错误包装器，适配任意 Error
- */
+/// 通用错误包装器，适配任意 Error
 struct GenericCryoError: CryoError {
     let underlyingError: Error
-
-    var localizedDescription: String {
-        return underlyingError.localizedDescription
-    }
-
-    init(_ error: Error) {
-        self.underlyingError = error
-    }
+    var localizedDescription: String { underlyingError.localizedDescription }
+    init(_ error: Error) { self.underlyingError = error }
 }
 
-// MARK: - 拦截器错误包装器
-
-/**
- 拦截器错误包装器，包含拦截器配置和原始数据
- */
+/// 拦截器错误包装器，包含拦截器配置和原始数据
 struct InterceptorError: CryoError {
     let message: String
     let originalData: Data?
     let interceptorInfo: [String: Any]?
-
-    var localizedDescription: String {
-        return message
-    }
-
+    var localizedDescription: String { message }
     init(message: String, originalData: Data? = nil, interceptorInfo: [String: Any]? = nil) {
         self.message = message
         self.originalData = originalData
@@ -169,14 +147,11 @@ struct InterceptorError: CryoError {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-
-    /**
-     原始响应 Data 处理
-     - Parameters:
-        - success: 成功回调，返回 Data
-        - failed: 失败回调，返回 CryoError
-     - Returns: self
-     */
+    /// 响应为原始 Data
+    /// - Parameters:
+    ///   - success: 成功回调（Data）
+    ///   - failed: 失败回调（CryoError）
+    /// - Returns: self
     @discardableResult
     public func responseData(
         success: @escaping (Data) -> Void,
@@ -195,13 +170,11 @@ extension CryoResult {
         return self
     }
 
-    /**
-     原始响应 JSON 处理
-     - Parameters:
-        - success: 成功回调，返回 SwiftyJSON
-        - failed: 失败回调，返回 CryoError
-     - Returns: self
-     */
+    /// 响应为 SwiftyJSON
+    /// - Parameters:
+    ///   - success: 成功回调
+    ///   - failed: 失败回调
+    /// - Returns: self
     @discardableResult
     public func responseJSON(
         success: @escaping (JSON) -> Void,
@@ -227,14 +200,12 @@ extension CryoResult {
         return self
     }
 
-    /**
-     原始响应模型解码
-     - Parameters:
-        - type: 模型类型
-        - success: 成功回调
-        - failed: 失败回调
-     - Returns: self
-     */
+    /// 响应为单模型解码
+    /// - Parameters:
+    ///   - type: 模型类型
+    ///   - success: 成功回调
+    ///   - failed: 失败回调
+    /// - Returns: self
     @discardableResult
     public func responseModel<T: Decodable>(
         type: T.Type,
@@ -264,14 +235,12 @@ extension CryoResult {
         return self
     }
 
-    /**
-     原始响应模型数组解码
-     - Parameters:
-        - type: 模型类型
-        - success: 成功回调
-        - failed: 失败回调
-     - Returns: self
-     */
+    /// 响应为模型数组解码
+    /// - Parameters:
+    ///   - type: 模型类型
+    ///   - success: 成功回调
+    ///   - failed: 失败回调
+    /// - Returns: self
     @discardableResult
     public func responseModelArray<T: Decodable>(
         type: T.Type,
@@ -306,7 +275,6 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-
     /// 获取拦截器配置信息（用于日志和错误包装）
     func getInterceptorInfo() -> [String: Any]? {
         if let configProvider = interceptor as? InterceptorConfigProvider {
@@ -315,14 +283,12 @@ extension CryoResult {
         return nil
     }
 
-    /**
-     拦截器响应并解码单个模型
-     - Parameters:
-        - type: 模型类型
-        - success: 成功回调
-        - failed: 失败回调（错误信息 String）
-     - Returns: self
-     */
+    /// 拦截器响应并解码单个模型
+    /// - Parameters:
+    ///   - type: 模型类型
+    ///   - success: 成功回调
+    ///   - failed: 失败回调（错误信息 String）
+    /// - Returns: self
     @discardableResult
     public func interceptModel<T: Codable>(
         type: T.Type,
@@ -377,9 +343,7 @@ extension CryoResult {
         return self
     }
 
-    /**
-     拦截器响应完整数据并解码模型
-     */
+    /// 拦截器响应完整数据并解码模型
     @discardableResult
     public func interceptModelCompleteData<T: Codable>(
         type: T.Type,
@@ -433,9 +397,7 @@ extension CryoResult {
         return self
     }
 
-    /**
-     拦截器响应完整数据并解码 SwiftyJSON
-     */
+    /// 拦截器响应完整数据并解码 SwiftyJSON
     @discardableResult
     public func interceptJSON(
         success: @escaping (JSON) -> Void,
@@ -488,9 +450,7 @@ extension CryoResult {
         return self
     }
 
-    /**
-     拦截器响应模型数组
-     */
+    /// 拦截器响应模型数组
     @discardableResult
     public func interceptModelArray<T: Codable>(
         type: T.Type,
@@ -549,10 +509,8 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-    /**
-     处理响应回调，封装 responseData
-     - Parameter completion: 回调闭包
-     */
+    /// 处理响应回调，封装 responseData
+    /// - Parameter completion: 回调闭包
     private func handleResponse(
         completion: @escaping (AFDataResponse<Data>) -> Void
     ) {
@@ -566,10 +524,8 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-    /**
-     异步获取原始 Data 数据
-     - Returns: Data
-     */
+    /// 异步获取原始 Data 数据
+    /// - Returns: Data
     public func responseDataAsync() async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             responseData { data in
@@ -580,10 +536,8 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步获取 SwiftyJSON 对象
-     - Returns: JSON
-     */
+    /// 异步获取 SwiftyJSON 对象
+    /// - Returns: JSON
     public func responseJSONAsync() async throws -> JSON {
         let data = try await responseDataAsync()
         do {
@@ -593,11 +547,9 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步解码模型
-     - Parameter type: 模型类型
-     - Returns: 解码后的模型
-     */
+    /// 异步解码模型
+    /// - Parameter type: 模型类型
+    /// - Returns: 解码后的模型
     public func responseModelAsync<T: Decodable>(_ type: T.Type) async throws -> T {
         let data = try await responseDataAsync()
         do {
@@ -609,11 +561,9 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步解码模型数组
-     - Parameter type: 模型类型
-     - Returns: 解码后的模型数组
-     */
+    /// 异步解码模型数组
+    /// - Parameter type: 模型类型
+    /// - Returns: 解码后的模型数组
     public func responseModelArrayAsync<T: Decodable>(_ type: T.Type) async throws -> [T] {
         let data = try await responseDataAsync()
         do {
@@ -630,11 +580,9 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-    /**
-     统一拦截器错误处理，包装为 InterceptorError
-     - Parameter error: 错误信息
-     - Returns: Error
-     */
+    /// 统一拦截器错误处理，包装为 InterceptorError
+    /// - Parameter error: 错误信息
+    /// - Returns: Error
     internal func handleInterceptorError(_ error: String) -> Error {
         let interceptorInfo = getInterceptorInfo()
         return InterceptorError(
@@ -643,11 +591,9 @@ extension CryoResult {
         )
     }
 
-    /**
-     异步拦截器获取模型
-     - Parameter type: 模型类型
-     - Returns: 解码后的模型
-     */
+    /// 异步拦截器获取模型
+    /// - Parameter type: 模型类型
+    /// - Returns: 解码后的模型
     public func interceptModelAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
             interceptModel(type: type) { model in
@@ -658,9 +604,7 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步拦截器获取完整数据模型
-     */
+    /// 异步拦截器获取完整数据模型
     public func interceptModelCompleteDataAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
             interceptModelCompleteData(type: type) { model in
@@ -671,9 +615,7 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步拦截器获取完整 SwiftyJSON
-     */
+    /// 异步拦截器获取完整 SwiftyJSON
     public func interceptJSONAsync() async throws -> JSON {
         return try await withCheckedThrowingContinuation { continuation in
             interceptJSON { json in
@@ -684,9 +626,7 @@ extension CryoResult {
         }
     }
 
-    /**
-     异步拦截器获取模型数组
-     */
+    /// 异步拦截器获取模型数组
     public func interceptModelArrayAsync<T: Codable>(_ type: T.Type) async throws -> [T] {
         return try await withCheckedThrowingContinuation { continuation in
             interceptModelArray(type: type) { models in

@@ -2,9 +2,22 @@ import Foundation
 import SwiftyJSON
 
 // MARK: - 响应结构配置协议
-/**
- 响应结构配置协议，定义了如何从响应中解析通用结构体（如 code/msg/data）。
- */
+
+/// `ResponseStructureConfig` 响应结构配置协议，定义如何从响应中解析通用结构体（如 code/msg/data）。
+///
+/// 适用于自定义业务结构解析（如 code/msg/data、status/message/result 等）
+///
+/// ### 使用示例
+/// ```swift
+/// struct MyResponseConfig: ResponseStructureConfig {
+///     var codeKey = "status"
+///     var messageKey = "msg"
+///     var dataKey = "result"
+///     var successCode = 0
+///     func isSuccess(json: JSON) -> Bool { json[codeKey].intValue == successCode }
+///     func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> { ... }
+/// }
+/// ```
 public protocol ResponseStructureConfig: Sendable {
     /// 状态码字段的key
     var codeKey: String { get }
