@@ -17,7 +17,6 @@ import SwiftyJSON
 ///     basicURL: "https://api.example.com",
 ///     basicHeaders: [HTTPHeader(name: "Authorization", value: "Bearer your_token")],
 ///     defaultTimeout: 60,
-///     maxConcurrentDownloads: 10,
 ///     tokenManager: CustomTokenManager(), // 假设您有一个自定义的Token管理器
 ///     interceptor: CustomRequestInterceptor() // 假设您有一个自定义的请求拦截器
 /// )
@@ -38,8 +37,6 @@ public struct CryoNetConfiguration: Sendable {
     public var basicHeaders: [HTTPHeader]
     /// 默认超时时间（秒）
     public var defaultTimeout: TimeInterval
-    /// 最大并发下载数
-    public var maxConcurrentDownloads: Int
     /// Token 管理器
     public var tokenManager: TokenManagerProtocol
     /// 请求响应拦截器
@@ -51,7 +48,6 @@ public struct CryoNetConfiguration: Sendable {
     ///   - basicURL: 基础请求地址。默认为空字符串。
     ///   - basicHeaders: 基础请求头数组。默认为 `[HTTPHeader(name: "Content-Type", value: "application/json")]`。
     ///   - defaultTimeout: 默认超时时间（秒）。默认为 30 秒。
-    ///   - maxConcurrentDownloads: 最大并发下载量。默认为 6。
     ///   - tokenManager: 用于管理 Token 的实例。默认为 ``DefaultTokenManager``()。
     ///   - interceptor: 请求拦截器实例。默认为 `nil`。
     ///
@@ -70,14 +66,12 @@ public struct CryoNetConfiguration: Sendable {
         basicURL: String = "",
         basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
         defaultTimeout: TimeInterval = 30,
-        maxConcurrentDownloads: Int = 6,
         tokenManager: TokenManagerProtocol = DefaultTokenManager(),
         interceptor: RequestInterceptorProtocol? = nil
     ) {
         self.basicURL = basicURL
         self.basicHeaders = basicHeaders
         self.defaultTimeout = defaultTimeout
-        self.maxConcurrentDownloads = maxConcurrentDownloads
         self.tokenManager = tokenManager
         self.interceptor = interceptor
     }
@@ -156,7 +150,6 @@ public class CryoNet {
     /// let cryoNet = CryoNet { config in
     ///     config.basicURL = "https://api.my-app.com"
     ///     config.defaultTimeout = 45
-    ///     config.maxConcurrentDownloads = 8
     /// }
     /// ```
     ///

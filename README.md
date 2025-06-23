@@ -41,7 +41,6 @@ let net = CryoNet(configuration: CryoNetConfiguration(
     basicURL: "https://api.example.com",
     basicHeaders: [HTTPHeader(name: "Content-Type", value: "application/json")],
     defaultTimeout: 15,
-    maxConcurrentDownloads: 4,
     tokenManager: MyTokenManager(),    // 可自定义
     interceptor: MyRequestInterceptor() // 可自定义
 ))
