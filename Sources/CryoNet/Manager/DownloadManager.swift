@@ -7,11 +7,18 @@ import UIKit
 #endif
 
 // MARK: - 下载任务状态
+/// 下载任务的状态枚举
 public enum DownloadState: String {
-    case idle, downloading, paused, completed, failed, cancelled
+    case idle          /// 等待中
+    case downloading   /// 正在下载
+    case paused        /// 已暂停
+    case completed     /// 已完成
+    case failed        /// 失败
+    case cancelled     /// 已取消
 }
 
 // MARK: - 下载任务信息
+/// 下载任务公开信息（供 UI 使用）
 public struct DownloadTaskInfo: Identifiable {
     public let id: UUID
     public let url: URL
@@ -23,12 +30,15 @@ public struct DownloadTaskInfo: Identifiable {
 
 // MARK: - 下载任务事件委托
 public protocol DownloadManagerDelegate: AnyObject {
+    /// 下载进度更新
     func downloadProgressDidUpdate(task: DownloadTaskInfo)
+    /// 下载完成
     func downloadDidComplete(task: DownloadTaskInfo)
+    /// 下载失败
     func downloadDidFail(task: DownloadTaskInfo)
 }
 
-// MARK: - 内部下载任务
+// MARK: - 内部下载任务结构体
 private struct DownloadTask {
     let id: UUID
     let url: URL
@@ -40,26 +50,35 @@ private struct DownloadTask {
     var request: DownloadRequest?
 }
 
-// MARK: - 下载管理器（支持基础地址批量下载）
+// MARK: - 下载管理器
+/// 支持批量/单个下载、并发控制、进度回调
 public actor DownloadManager {
     public let identifier: String
     private var tasks: [UUID: DownloadTask] = [:]
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
-    private let fileManager = FileManager.default
     private var maxConcurrentDownloads: Int
     private var currentDownloadingCount: Int = 0
     private var pendingQueue: [UUID] = []
+    private let fileManager = FileManager.default
 
+    // MARK: 初始化
+    /// 初始化 DownloadManager
+    /// - Parameters:
+    ///   - identifier: 队列标识
+    ///   - maxConcurrentDownloads: 最大并发数（默认3）
     public init(identifier: String = UUID().uuidString, maxConcurrentDownloads: Int = 3) {
         self.identifier = identifier
         self.maxConcurrentDownloads = maxConcurrentDownloads
     }
 
+    // MARK: 并发设置
+    /// 设置最大并发下载数
     public func setMaxConcurrentDownloads(_ count: Int) {
         self.maxConcurrentDownloads = max(1, count)
         Task { self.checkAndStartNext() }
     }
 
+    // MARK: 委托管理
     public func addDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.add(delegate)
     }
@@ -67,13 +86,8 @@ public actor DownloadManager {
         delegates.remove(delegate)
     }
 
-    /// 批量下载（支持基础地址和多个文件名）
-    /// - Parameters:
-    ///   - baseURL: 基础地址（如 https://example.com/files/）
-    ///   - fileNames: 文件名数组（如 ["a.jpg", "b.jpg"]）
-    ///   - destinationFolder: 保存文件夹（可选）
-    ///   - saveToAlbum: 是否保存到相册
-    /// - Returns: 任务ID数组
+    // MARK: 批量下载
+    /// 批量下载（基础地址+文件名数组）
     public func batchDownload(
         baseURL: URL,
         fileNames: [String],
@@ -91,7 +105,8 @@ public actor DownloadManager {
         return ids
     }
 
-    /// 单个下载
+    // MARK: 单任务下载
+    /// 启动单个下载任务
     public func startDownload(
         from url: URL,
         to destination: URL? = nil,
@@ -125,10 +140,12 @@ public actor DownloadManager {
         }
     }
 
+    /// 手动启动任务（恢复）
     public func startTask(id: UUID) {
         enqueueOrStartTask(id: id)
     }
 
+    /// 实际发起下载
     private func startTaskInternal(id: UUID) {
         guard let task = tasks[id] else { return }
         guard task.state == .idle || task.state == .paused else { return }
@@ -143,6 +160,7 @@ public actor DownloadManager {
 
         let request = AF.download(currentTask.url, to: destination)
             .downloadProgress { [weak self] progress in
+                // 用 actor 保证线程安全，不直接访问 self
                 Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
             }
             .responseData { [weak self] response in
@@ -154,6 +172,7 @@ public actor DownloadManager {
         notifyProgress(currentTask)
     }
 
+    // MARK: 任务控制
     public func pauseTask(id: UUID) {
         guard var task = tasks[id], let request = task.request else { return }
         request.suspend()
@@ -198,6 +217,7 @@ public actor DownloadManager {
         }
     }
 
+    // MARK: 状态查询
     public func getTaskInfo(id: UUID) -> DownloadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return DownloadTaskInfo(
@@ -223,6 +243,7 @@ public actor DownloadManager {
         }
     }
 
+    // MARK: 批量控制
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
     }
@@ -233,6 +254,7 @@ public actor DownloadManager {
         for id in ids { cancelTask(id: id) }
     }
 
+    // MARK: 并发队列调度
     private func checkAndStartNext() {
         while currentDownloadingCount < maxConcurrentDownloads, !pendingQueue.isEmpty {
             let nextId = pendingQueue.removeFirst()
@@ -240,6 +262,7 @@ public actor DownloadManager {
         }
     }
 
+    // MARK: 下载事件回调
     private func onProgress(id: UUID, progress: Double) {
         guard var currentTask = tasks[id] else { return }
         currentTask.progress = progress
@@ -275,6 +298,7 @@ public actor DownloadManager {
         tasks[id] = task
     }
 
+    // MARK: 代理回调封装（保证主线程回调，防止SwiftUI警告）
     private func notifyProgress(_ task: DownloadTask) {
         let info = DownloadTaskInfo(
             id: task.id,
@@ -285,7 +309,9 @@ public actor DownloadManager {
             error: task.error
         )
         for delegate in delegates.allObjects {
-            (delegate as? DownloadManagerDelegate)?.downloadProgressDidUpdate(task: info)
+            Task { @MainActor in
+                (delegate as? DownloadManagerDelegate)?.downloadProgressDidUpdate(task: info)
+            }
         }
     }
     private func notifyCompletion(_ task: DownloadTask) {
@@ -298,7 +324,9 @@ public actor DownloadManager {
             error: task.error
         )
         for delegate in delegates.allObjects {
-            (delegate as? DownloadManagerDelegate)?.downloadDidComplete(task: info)
+            Task { @MainActor in
+                (delegate as? DownloadManagerDelegate)?.downloadDidComplete(task: info)
+            }
         }
     }
     private func notifyFailure(_ task: DownloadTask) {
@@ -311,10 +339,14 @@ public actor DownloadManager {
             error: task.error
         )
         for delegate in delegates.allObjects {
-            (delegate as? DownloadManagerDelegate)?.downloadDidFail(task: info)
+            Task { @MainActor in
+                (delegate as? DownloadManagerDelegate)?.downloadDidFail(task: info)
+            }
         }
     }
 
+    // MARK: 工具方法
+    /// 默认下载目录
     public static func defaultDownloadFolder() -> URL {
         #if os(macOS)
         return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
@@ -323,6 +355,7 @@ public actor DownloadManager {
         #endif
     }
 
+    /// 下载完成后，若为图片/视频则保存到相册（iOS/watchOS）
     static func saveToAlbumIfNeeded(fileURL: URL) async {
         #if os(iOS) || os(watchOS)
         let ext = fileURL.pathExtension.lowercased()
@@ -347,6 +380,14 @@ public actor DownloadManager {
         }
     }
     #endif
+    
+    
+//    /// 获取总进度（0~1），参数可选过滤（如排除 cancelled）
+//    public func totalProgress(includeCancelled: Bool = false) -> Double {
+//        let all = tasks.values
+//        let filtered = includeCancelled ? all : all.filter { $0.state != .cancelled }
+//        guard !filtered.isEmpty else { return 0 }
+//        let sum = filtered.map { min($0.progress, 1.0) }.reduce(0, +)
+//        return sum / Double(filtered.count)
+//    }
 }
-
-
