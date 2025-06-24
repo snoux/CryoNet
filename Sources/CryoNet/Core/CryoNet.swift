@@ -398,6 +398,7 @@ public extension CryoNet {
     /// ```
     ///
     /// - SeeAlso: ``RequestModel``, ``UploadData``, ``CryoResult``, ``uploadFile(_:files:parameters:headers:interceptor:config:)``
+    @available(*, deprecated, message: "即将弃用，请使用 UploadManager 的 batchUpload方法")
     @discardableResult
     func upload(
         _ model: RequestModel,
