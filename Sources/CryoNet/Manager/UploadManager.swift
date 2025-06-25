@@ -1,6 +1,6 @@
 import Foundation
 import Alamofire
-import CryoNet
+
 #if os(iOS) || os(watchOS)
 import UIKit
 #endif
@@ -23,8 +23,7 @@ public struct UploadTaskInfo: Identifiable {
     public let fileURL: URL              /// 本地文件路径
     public var progress: Double          /// 当前进度（0~1）
     public var state: UploadState        /// 当前任务状态
-    public var response: Data?           /// 上传响应（成功时）
-    public var error: Error?             /// 错误信息（失败时）
+    public var response: DataRequest?    /// 上传请求对象（如需获取详细响应，可在 UI 层监听 response 事件）
 }
 
 // MARK: - 上传任务事件委托
@@ -51,9 +50,7 @@ private struct UploadTask {
     let formFieldName: String      /// 表单字段名
     var progress: Double           /// 当前进度
     var state: UploadState         /// 状态
-    var response: AFDataResponse<Data?>            /// 上传响应数据
-    var error: Error?              /// 错误信息
-    var request: UploadRequest?    /// Alamofire 上传请求对象
+    var response: DataRequest?     /// 上传请求对象
 }
 
 // MARK: - 上传管理器
@@ -66,20 +63,22 @@ public actor UploadManager {
     private var currentUploadingCount: Int = 0             /// 当前正在上传的任务数
     private var pendingQueue: [UUID] = []                  /// 等待上传的任务队列
     private var overallCompletedCalled: Bool = false       /// 整体完成回调只调用一次
-    
-    /// Token 管理器
-    private var headers: [HTTPHeader] = []
-    /// 请求响应拦截器
-    private var interceptor: RequestInterceptorProtocol?
+    private let headers: HTTPHeaders?                      /// 默认HTTP头
+    private let interceptor: RequestInterceptor?           /// 可自定义拦截器
 
     // MARK: - 初始化
     /// 初始化 UploadManager
     /// - Parameters:
     ///   - identifier: 队列标识
     ///   - maxConcurrentUploads: 最大并发上传数（默认3）
-    ///   - headers: 基础 Headers
-    ///   - interceptor: 拦截器
-    public init(identifier: String = UUID().uuidString, maxConcurrentUploads: Int = 3,headers: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "multipart/form-data")],interceptor:RequestInterceptorProtocol? = nil) {
+    ///   - headers: 全局HTTP头（默认nil）
+    ///   - interceptor: Alamofire拦截器（默认nil）
+    public init(
+        identifier: String = UUID().uuidString,
+        maxConcurrentUploads: Int = 3,
+        headers: HTTPHeaders? = nil,
+        interceptor: RequestInterceptor? = nil
+    ) {
         self.identifier = identifier
         self.maxConcurrentUploads = maxConcurrentUploads
         self.headers = headers
@@ -96,24 +95,16 @@ public actor UploadManager {
 
     // MARK: - 委托管理
     /// 添加上传事件委托对象
-    /// - Parameter delegate: 要添加的委托对象
     public func addDelegate(_ delegate: UploadManagerDelegate) {
         delegates.add(delegate)
     }
     /// 移除上传事件委托对象
-    /// - Parameter delegate: 要移除的委托对象
     public func removeDelegate(_ delegate: UploadManagerDelegate) {
         delegates.remove(delegate)
     }
 
     // MARK: - 批量上传
     /// 批量上传文件
-    /// - Parameters:
-    ///   - uploadURL: 目标上传接口URL
-    ///   - fileURLs: 本地文件URL数组
-    ///   - formFieldName: 上传字段名，通常为"file"或"files"
-    ///   - extraForm: 额外表单参数
-    /// - Returns: 各任务ID组成的数组
     public func batchUpload(
         uploadURL: URL,
         fileURLs: [URL],
@@ -135,12 +126,6 @@ public actor UploadManager {
 
     // MARK: - 单任务上传
     /// 启动单个上传任务
-    /// - Parameters:
-    ///   - fileURL: 本地文件路径
-    ///   - uploadURL: 目标上传接口URL
-    ///   - formFieldName: 上传字段名
-    ///   - extraForm: 额外表单参数
-    /// - Returns: 任务ID
     public func startUpload(
         fileURL: URL,
         uploadURL: URL,
@@ -155,9 +140,7 @@ public actor UploadManager {
             formFieldName: formFieldName,
             progress: 0,
             state: .idle,
-            response: nil,
-            error: nil,
-            request: nil
+            response: nil
         )
         tasks[id] = task
         enqueueOrStartTask(id: id, extraForm: extraForm)
@@ -202,17 +185,17 @@ public actor UploadManager {
             },
             to: currentTask.uploadURL,
             method: .post,
-            headers: self.headers,
-            interceptor:self.interceptor
+            headers: headers,
+            interceptor: interceptor
         )
         .uploadProgress { [weak self] progress in
             Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
         }
-        .response { [weak self] response in
-            Task { await self?.onComplete(id: id, response: response) }
+        .response { [weak self] _ in
+            Task { await self?.onComplete(id: id) }
         }
 
-        currentTask.request = request
+        currentTask.response = request
         tasks[id] = currentTask
         notifyProgress(currentTask)
         notifyOverallProgress()
@@ -220,9 +203,8 @@ public actor UploadManager {
 
     // MARK: - 任务控制
     /// 暂停指定任务
-    /// - Parameter id: 任务ID
     public func pauseTask(id: UUID) {
-        guard var task = tasks[id], let request = task.request else { return }
+        guard var task = tasks[id], let request = task.response else { return }
         request.suspend()
         if task.state == .uploading {
             currentUploadingCount = max(0, currentUploadingCount - 1)
@@ -235,7 +217,6 @@ public actor UploadManager {
     }
 
     /// 恢复指定任务
-    /// - Parameter id: 任务ID
     public func resumeTask(id: UUID, extraForm: [String: String]? = nil) {
         guard let task = tasks[id] else { return }
         if task.state == .paused {
@@ -244,7 +225,6 @@ public actor UploadManager {
     }
 
     /// 取消指定任务
-    /// - Parameter id: 任务ID
     public func cancelTask(id: UUID) {
         if let idx = pendingQueue.firstIndex(of: id) {
             pendingQueue.remove(at: idx)
@@ -253,7 +233,7 @@ public actor UploadManager {
             notifyOverallProgress()
             return
         }
-        guard var task = tasks[id], let request = task.request else { return }
+        guard var task = tasks[id], let request = task.response else { return }
         request.cancel()
         if task.state == .uploading {
             currentUploadingCount = max(0, currentUploadingCount - 1)
@@ -266,7 +246,6 @@ public actor UploadManager {
     }
 
     /// 移除任务（不会删除本地文件，仅移除管理器记录）
-    /// - Parameter id: 任务ID
     public func removeTask(id: UUID) {
         tasks[id] = nil
         if let idx = pendingQueue.firstIndex(of: id) {
@@ -277,8 +256,6 @@ public actor UploadManager {
 
     // MARK: - 状态查询
     /// 获取单个任务的信息
-    /// - Parameter id: 任务ID
-    /// - Returns: 任务信息
     public func getTaskInfo(id: UUID) -> UploadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return UploadTaskInfo(
@@ -286,13 +263,11 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response,
-            error: task.error
+            response: task.response
         )
     }
 
     /// 获取所有任务的信息
-    /// - Returns: 任务信息数组
     public func allTaskInfos() -> [UploadTaskInfo] {
         return tasks.values.map {
             UploadTaskInfo(
@@ -300,8 +275,7 @@ public actor UploadManager {
                 fileURL: $0.fileURL,
                 progress: $0.progress,
                 state: $0.state,
-                response: $0.response,
-                error: $0.error
+                response: $0.response
             )
         }
     }
@@ -341,21 +315,13 @@ public actor UploadManager {
     }
 
     /// 完成事件
-    private func onComplete(id: UUID, response: AFDataResponse<Data?>) async {
+    private func onComplete(id: UUID) async {
         guard var currentTask = tasks[id] else { return }
         currentUploadingCount = max(0, currentUploadingCount - 1)
         defer { Task { self.checkAndStartNext() } }
-        if let error = response.error {
-            currentTask.state = .failed
-            currentTask.error = error
-            tasks[id] = currentTask
-            notifyFailure(currentTask)
-            notifyOverallProgress()
-            return
-        }
+        // 这里未判断response.error，建议UI层监听DataRequest的response事件
         currentTask.progress = 1.0
         currentTask.state = .completed
-        currentTask.response = response
         tasks[id] = currentTask
         notifyCompletion(currentTask)
         notifyOverallProgress()
@@ -376,8 +342,7 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -392,8 +357,7 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -408,8 +372,7 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in

@@ -19,13 +19,14 @@ public enum DownloadState: String {
 
 // MARK: - 下载任务信息
 /// 下载任务公开信息（供 UI 使用、外部获取任务状态与详情）
+/// - response: DataRequest?，可用于外部获取 Alamofire 的详细响应
 public struct DownloadTaskInfo: Identifiable {
     public let id: UUID                  /// 任务唯一标识
     public let url: URL                  /// 下载资源的URL
     public var progress: Double          /// 当前进度（0~1）
     public var state: DownloadState      /// 当前任务状态
     public var destination: URL          /// 文件保存路径
-    public var error: Error?             /// 错误信息（失败时）
+    public var response: DownloadRequest?    /// 下载请求对象（如需获取详细响应，可在 UI 层监听 response 事件）
 }
 
 // MARK: - 下载任务事件委托
@@ -44,6 +45,7 @@ public protocol DownloadManagerDelegate: AnyObject {
 }
 
 // MARK: - 内部下载任务结构体
+/// DownloadManager 内部使用的下载任务结构体
 private struct DownloadTask {
     let id: UUID                   /// 任务唯一标识
     let url: URL                   /// 下载资源URL
@@ -51,8 +53,7 @@ private struct DownloadTask {
     let saveToAlbum: Bool          /// 下载完成后是否保存到相册（仅图片/视频）
     var progress: Double           /// 当前进度
     var state: DownloadState       /// 状态
-    var error: Error?              /// 错误信息
-    var request: DownloadRequest?  /// Alamofire 下载请求对象
+    var response: DownloadRequest?     /// 下载请求对象
 }
 
 // MARK: - 下载管理器
@@ -68,14 +69,26 @@ public actor DownloadManager {
     private let fileManager = FileManager.default          /// 文件管理器
     private var overallCompletedCalled: Bool = false       /// 整体完成只回调一次
 
+    private let headers: HTTPHeaders?                      /// 默认HTTP头
+    private let interceptor: RequestInterceptor?           /// 可自定义拦截器
+
     // MARK: - 初始化
     /// 创建 DownloadManager
     /// - Parameters:
     ///   - identifier: 队列唯一标识
     ///   - maxConcurrentDownloads: 最大并发数（默认3）
-    public init(identifier: String = UUID().uuidString, maxConcurrentDownloads: Int = 3) {
+    ///   - headers: 默认HTTP头
+    ///   - interceptor: 自定义Alamofire拦截器
+    public init(
+        identifier: String = UUID().uuidString,
+        maxConcurrentDownloads: Int = 3,
+        headers: HTTPHeaders? = nil,
+        interceptor: RequestInterceptor? = nil
+    ) {
         self.identifier = identifier
         self.maxConcurrentDownloads = maxConcurrentDownloads
+        self.headers = headers
+        self.interceptor = interceptor
     }
 
     // MARK: - 并发设置
@@ -98,6 +111,12 @@ public actor DownloadManager {
 
     // MARK: - 批量下载
     /// 批量下载（基础地址+文件名数组）
+    /// - Parameters:
+    ///   - baseURL: 基础下载地址（如 https://example.com/files/）
+    ///   - fileNames: 文件名数组（如 ["a.mp4","b.jpg"]）
+    ///   - destinationFolder: 保存目录（可选，默认为应用的下载目录）
+    ///   - saveToAlbum: 下载完成后是否保存到相册
+    /// - Returns: 各任务ID组成的数组
     public func batchDownload(
         baseURL: URL,
         fileNames: [String],
@@ -117,6 +136,11 @@ public actor DownloadManager {
 
     // MARK: - 单任务下载
     /// 启动单个下载任务
+    /// - Parameters:
+    ///   - url: 下载链接
+    ///   - destination: 保存路径（可选，默认应用下载目录）
+    ///   - saveToAlbum: 下载完成后是否保存到相册
+    /// - Returns: 任务ID
     public func startDownload(
         from url: URL,
         to destination: URL? = nil,
@@ -131,14 +155,14 @@ public actor DownloadManager {
             saveToAlbum: saveToAlbum,
             progress: 0,
             state: .idle,
-            error: nil,
-            request: nil
+            response: nil
         )
         tasks[id] = task
         enqueueOrStartTask(id: id)
         return id
     }
 
+    /// 判断是否可立即启动任务，否则加入等待队列
     private func enqueueOrStartTask(id: UUID) {
         if currentDownloadingCount < maxConcurrentDownloads {
             startTaskInternal(id: id)
@@ -168,17 +192,23 @@ public actor DownloadManager {
         }
         currentDownloadingCount += 1
 
-        // 使用 Alamofire 执行下载，监听进度与完成
-        let request = AF.download(currentTask.url, to: destination)
-            .downloadProgress { [weak self] progress in
-                // 注意：Alamofire回调非actor主线程，这里用Task切回actor隔离
-                Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
-            }
-            .responseData { [weak self] response in
-                Task { await self?.onComplete(id: id, response: response) }
-            }
+        /// 创建 Alamofire 下载请求，支持自定义 headers/interceptor
+        let request = AF.download(
+            currentTask.url,
+            method: .get,
+            headers: headers,
+            interceptor: interceptor,
+            to: destination
+        )
+        .downloadProgress { [weak self] progress in
+            // Alamofire 的回调非actor主线程，这里用 Task 切回 actor
+            Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
+        }
+        .responseData { [weak self] response in
+            Task { await self?.onComplete(id: id, response: response) }
+        }
 
-        currentTask.request = request
+        currentTask.response = request
         tasks[id] = currentTask
         notifyProgress(currentTask)
         notifyOverallProgress()
@@ -186,8 +216,9 @@ public actor DownloadManager {
 
     // MARK: - 任务控制
     /// 暂停指定任务
+    /// - Parameter id: 任务ID
     public func pauseTask(id: UUID) {
-        guard var task = tasks[id], let request = task.request else { return }
+        guard var task = tasks[id], let request = task.response else { return }
         request.suspend()
         if task.state == .downloading {
             currentDownloadingCount = max(0, currentDownloadingCount - 1)
@@ -200,6 +231,7 @@ public actor DownloadManager {
     }
 
     /// 恢复指定任务
+    /// - Parameter id: 任务ID
     public func resumeTask(id: UUID) {
         guard let task = tasks[id] else { return }
         if task.state == .paused {
@@ -208,6 +240,7 @@ public actor DownloadManager {
     }
 
     /// 取消指定任务
+    /// - Parameter id: 任务ID
     public func cancelTask(id: UUID) {
         if let idx = pendingQueue.firstIndex(of: id) {
             pendingQueue.remove(at: idx)
@@ -216,7 +249,7 @@ public actor DownloadManager {
             notifyOverallProgress()
             return
         }
-        guard var task = tasks[id], let request = task.request else { return }
+        guard var task = tasks[id], let request = task.response else { return }
         request.cancel()
         if task.state == .downloading {
             currentDownloadingCount = max(0, currentDownloadingCount - 1)
@@ -229,6 +262,7 @@ public actor DownloadManager {
     }
 
     /// 移除任务（不会删除本地文件，仅移除管理器记录）
+    /// - Parameter id: 任务ID
     public func removeTask(id: UUID) {
         tasks[id] = nil
         if let idx = pendingQueue.firstIndex(of: id) {
@@ -239,6 +273,8 @@ public actor DownloadManager {
 
     // MARK: - 状态查询
     /// 获取单个任务的信息
+    /// - Parameter id: 任务ID
+    /// - Returns: 任务信息
     public func getTaskInfo(id: UUID) -> DownloadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return DownloadTaskInfo(
@@ -247,11 +283,12 @@ public actor DownloadManager {
             progress: task.progress,
             state: task.state,
             destination: task.destination,
-            error: task.error
+            response: task.response
         )
     }
 
     /// 获取所有任务的信息
+    /// - Returns: 任务信息数组
     public func allTaskInfos() -> [DownloadTaskInfo] {
         return tasks.values.map {
             DownloadTaskInfo(
@@ -260,23 +297,27 @@ public actor DownloadManager {
                 progress: $0.progress,
                 state: $0.state,
                 destination: $0.destination,
-                error: $0.error
+                response: $0.response
             )
         }
     }
 
     // MARK: - 批量控制
+    /// 批量暂停
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
     }
+    /// 批量恢复
     public func batchResume(ids: [UUID]) {
         for id in ids { resumeTask(id: id) }
     }
+    /// 批量取消
     public func batchCancel(ids: [UUID]) {
         for id in ids { cancelTask(id: id) }
     }
 
     // MARK: - 并发队列调度
+    /// 检查等待队列并按并发数启动新任务
     private func checkAndStartNext() {
         while currentDownloadingCount < maxConcurrentDownloads, !pendingQueue.isEmpty {
             let nextId = pendingQueue.removeFirst()
@@ -285,6 +326,7 @@ public actor DownloadManager {
     }
 
     // MARK: - 下载事件回调
+    /// 进度事件
     private func onProgress(id: UUID, progress: Double) {
         guard var currentTask = tasks[id] else { return }
         currentTask.progress = progress
@@ -294,13 +336,14 @@ public actor DownloadManager {
         notifyOverallProgress()
     }
 
+    /// 完成事件
     private func onComplete(id: UUID, response: AFDownloadResponse<Data>) async {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         defer { Task { self.checkAndStartNext() } }
-        if let error = response.error {
+        if response.error != nil {
             currentTask.state = .failed
-            currentTask.error = error
+            // 若你需要可自定义 error 信息，用 response.data/request 等
             tasks[id] = currentTask
             notifyFailure(currentTask)
             notifyOverallProgress()
@@ -317,6 +360,7 @@ public actor DownloadManager {
         }
     }
 
+    /// 更新任务状态（内部调度用）
     private func updateTaskState(id: UUID, state: DownloadState) {
         guard var task = tasks[id] else { return }
         task.state = state
@@ -324,6 +368,7 @@ public actor DownloadManager {
     }
 
     // MARK: - 代理回调（保证主线程回调，防止 SwiftUI 线程警告）
+    /// 通知所有委托：进度更新
     private func notifyProgress(_ task: DownloadTask) {
         let info = DownloadTaskInfo(
             id: task.id,
@@ -331,7 +376,7 @@ public actor DownloadManager {
             progress: task.progress,
             state: task.state,
             destination: task.destination,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -339,6 +384,7 @@ public actor DownloadManager {
             }
         }
     }
+    /// 通知所有委托：下载完成
     private func notifyCompletion(_ task: DownloadTask) {
         let info = DownloadTaskInfo(
             id: task.id,
@@ -346,7 +392,7 @@ public actor DownloadManager {
             progress: task.progress,
             state: task.state,
             destination: task.destination,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -354,6 +400,7 @@ public actor DownloadManager {
             }
         }
     }
+    /// 通知所有委托：下载失败
     private func notifyFailure(_ task: DownloadTask) {
         let info = DownloadTaskInfo(
             id: task.id,
@@ -361,7 +408,7 @@ public actor DownloadManager {
             progress: task.progress,
             state: task.state,
             destination: task.destination,
-            error: task.error
+            response: task.response
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -383,12 +430,6 @@ public actor DownloadManager {
     private func isOverallCompleted() -> Bool {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
-    }
-
-    /// 检查所有未取消任务是否全部失败
-    private func isOverallFailed() -> Bool {
-        let validTasks = tasks.values.filter { $0.state != .cancelled }
-        return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .failed }
     }
 
     /// 通知整体进度、整体完成
