@@ -360,8 +360,6 @@ public actor DownloadManager {
         }
 
         currentTask.response = request
-        tasks[id] = currentTask
-        notifyProgress(currentTask)
         notifyOverallProgress()
         updateBatchStateIfNeeded()
     }

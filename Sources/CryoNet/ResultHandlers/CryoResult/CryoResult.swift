@@ -29,7 +29,7 @@ public struct CryoResult: Sendable {
     init(
         request: DataRequest,
         interceptor: RequestInterceptorProtocol? = nil
-    ) {
+    ){
         self.request = request
         self.interceptor = interceptor
     }

@@ -58,6 +58,9 @@ public struct UploadTaskInfo: Identifiable {
     /// 如果需要获取更详细的响应信息（例如HTTP状态码、响应头等），
     /// 可以在UI层监听此 `DataRequest` 对象的事件。
     public var response: DataRequest?
+    
+    /// 关联的CryoResult对象，可用于链式响应处理
+    public var cryoResult: CryoResult?
 }
 
 // MARK: - 上传任务事件委托
@@ -87,9 +90,6 @@ public protocol UploadManagerDelegate: AnyObject {
     func uploadBatchStateDidUpdate(state: UploadBatchState)
 }
 
-/// `UploadManagerDelegate` 协议的默认实现。
-///
-/// 允许遵循此协议的类选择性地实现协议方法，而无需实现所有方法。
 public extension UploadManagerDelegate {
     func uploadProgressDidUpdate(task: UploadTaskInfo) {}
     func uploadDidComplete(task: UploadTaskInfo) {}
@@ -117,6 +117,8 @@ private struct UploadTask {
     var state: UploadState
     /// 关联的Alamofire数据请求对象。
     var response: DataRequest?
+    /// 关联的CryoResult对象，可用于链式响应处理
+    var cryoResult: CryoResult?
 }
 
 // MARK: - 上传管理器
@@ -141,8 +143,9 @@ public actor UploadManager {
     private var pendingQueue: [UUID] = []
     /// 默认的HTTP请求头。
     private let headers: HTTPHeaders?
-    /// 可自定义的Alamofire请求拦截器。
-    private let interceptor: RequestInterceptor?
+    /// 可自定义的Alamofire请求拦截器（通过 CryoNet 适配器）
+    private var interceptor: InterceptorAdapter?
+    private var businessInterceptor: RequestInterceptorProtocol?
     /// 最近一次的批量状态，用于防止重复回调。
     private var lastBatchState: UploadBatchState = .idle
 
@@ -154,6 +157,7 @@ public actor UploadManager {
     ///   - maxConcurrentUploads: 最大并发上传数。默认为3。
     ///   - headers: 应用于所有上传请求的默认HTTP头。默认为 `nil`。
     ///   - interceptor: 自定义的Alamofire请求拦截器。默认为 `nil`。
+    ///   - toTokenManager: token管理器，缺省为 DefaultTokenManager
     ///
     /// - Example:
     /// ```swift
@@ -163,12 +167,21 @@ public actor UploadManager {
         identifier: String = UUID().uuidString,
         maxConcurrentUploads: Int = 3,
         headers: HTTPHeaders? = nil,
-        interceptor: RequestInterceptor? = nil
+        interceptor: RequestInterceptorProtocol? = nil,
+        toTokenManager: TokenManagerProtocol = DefaultTokenManager()
     ) {
         self.identifier = identifier
         self.maxConcurrentUploads = maxConcurrentUploads
         self.headers = headers
-        self.interceptor = interceptor
+        var adapter: InterceptorAdapter? = nil
+        if let userInterceptor = interceptor {
+            adapter = InterceptorAdapter(
+                interceptor: userInterceptor,
+                tokenManager: toTokenManager
+            )
+        }
+        self.businessInterceptor = interceptor
+        self.interceptor = adapter
     }
 
     // MARK: - 并发设置
@@ -191,13 +204,6 @@ public actor UploadManager {
     ///
     /// 委托对象将接收上传任务的进度和状态更新。
     /// - Parameter delegate: 遵循 `UploadManagerDelegate` 协议的委托对象。
-    ///
-    /// - Example:
-    /// ```swift
-    /// class MyUploadDelegate: UploadManagerDelegate { /* ... */ }
-    /// let delegate = MyUploadDelegate()
-    /// manager.addDelegate(delegate)
-    /// ```
     public func addDelegate(_ delegate: UploadManagerDelegate) {
         delegates.add(delegate)
     }
@@ -205,11 +211,6 @@ public actor UploadManager {
     ///
     /// 移除后，该委托对象将不再接收上传事件。
     /// - Parameter delegate: 要移除的委托对象。
-    ///
-    /// - Example:
-    /// ```swift
-    /// manager.removeDelegate(delegate)
-    /// ```
     public func removeDelegate(_ delegate: UploadManagerDelegate) {
         delegates.remove(delegate)
     }
@@ -282,7 +283,8 @@ public actor UploadManager {
             formFieldName: formFieldName,
             progress: 0,
             state: .idle,
-            response: nil
+            response: nil,
+            cryoResult: nil
         )
         tasks[id] = task
         enqueueOrStartTask(id: id, extraForm: extraForm)
@@ -314,12 +316,6 @@ public actor UploadManager {
     /// - Parameters:
     ///   - id: 要启动的任务的唯一标识符。
     ///   - extraForm: 额外的表单数据，用于启动任务时传递。默认为 `nil`。
-    ///
-    /// - Example:
-    /// ```swift
-    /// // 假设 taskID 是一个已存在的任务ID
-    /// await manager.startTask(id: taskID, extraForm: ["userId": "123"]) // 恢复并带上额外参数
-    /// ```
     public func startTask(id: UUID, extraForm: [String: String]? = nil) {
         enqueueOrStartTask(id: id, extraForm: extraForm)
         updateBatchStateIfNeeded()
@@ -359,7 +355,9 @@ public actor UploadManager {
         .response { [weak self] _ in
             Task { await self?.onComplete(id: id) }
         }
-
+//        currentTask.cryoResult = CryoResult(request: request, interceptor: self.interceptor)
+        // 假设 businessInterceptor: RequestInterceptorProtocol?
+        currentTask.cryoResult = CryoResult(request: request, interceptor: self.businessInterceptor)
         currentTask.response = request
         tasks[id] = currentTask
         notifyProgress(currentTask)
@@ -372,11 +370,6 @@ public actor UploadManager {
     ///
     /// 如果任务正在上传，会减少当前上传计数并尝试启动下一个等待任务。
     /// - Parameter id: 要暂停的任务的唯一标识符。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.pauseTask(id: taskID)
-    /// ```
     public func pauseTask(id: UUID) {
         guard var task = tasks[id], let request = task.response else { return }
         request.suspend()
@@ -397,11 +390,6 @@ public actor UploadManager {
     /// - Parameters:
     ///   - id: 要恢复的任务的唯一标识符。
     ///   - extraForm: 恢复任务时可能需要的额外表单数据。默认为 `nil`。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.resumeTask(id: taskID)
-    /// ```
     public func resumeTask(id: UUID, extraForm: [String: String]? = nil) {
         guard let task = tasks[id] else { return }
         if task.state == .paused {
@@ -414,11 +402,6 @@ public actor UploadManager {
     ///
     /// 如果任务在等待队列中，则直接移除；如果正在上传，则取消Alamofire请求。
     /// - Parameter id: 要取消的任务的唯一标识符。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.cancelTask(id: taskID)
-    /// ```
     public func cancelTask(id: UUID) {
         if let idx = pendingQueue.firstIndex(of: id) {
             pendingQueue.remove(at: idx)
@@ -446,11 +429,6 @@ public actor UploadManager {
     /// 此操作会从管理器中完全删除任务，但不会取消正在进行的上传。
     /// 通常在任务完成后调用。
     /// - Parameter id: 要移除的任务的唯一标识符。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.removeTask(id: taskID)
-    /// ```
     public func removeTask(id: UUID) {
         tasks[id] = nil
         if let idx = pendingQueue.firstIndex(of: id) {
@@ -464,13 +442,6 @@ public actor UploadManager {
     /// 获取指定ID上传任务的公开信息。
     /// - Parameter id: 任务的唯一标识符。
     /// - Returns: 包含任务信息的 `UploadTaskInfo` 对象，如果任务不存在则返回 `nil`。
-    ///
-    /// - Example:
-    /// ```swift
-    /// if let taskInfo = await manager.getTaskInfo(id: taskID) {
-    ///     print("Task state: \(taskInfo.state)")
-    /// }
-    /// ```
     public func getTaskInfo(id: UUID) -> UploadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return UploadTaskInfo(
@@ -478,20 +449,13 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response
+            response: task.response,
+            cryoResult: task.cryoResult
         )
     }
 
     /// 获取所有上传任务的公开信息。
     /// - Returns: 包含所有任务信息的 `UploadTaskInfo` 数组。
-    ///
-    /// - Example:
-    /// ```swift
-    /// let allTasks = await manager.allTaskInfos()
-    /// for task in allTasks {
-    ///     print("Task \(task.id): \(task.state)")
-    /// }
-    /// ```
     public func allTaskInfos() -> [UploadTaskInfo] {
         return tasks.values.map {
             UploadTaskInfo(
@@ -499,7 +463,8 @@ public actor UploadManager {
                 fileURL: $0.fileURL,
                 progress: $0.progress,
                 state: $0.state,
-                response: $0.response
+                response: $0.response,
+                cryoResult: $0.cryoResult
             )
         }
     }
@@ -507,11 +472,6 @@ public actor UploadManager {
     // MARK: - 批量控制
     /// 批量暂停指定ID的上传任务。
     /// - Parameter ids: 要暂停的任务ID数组。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.batchPause(ids: [taskID1, taskID2])
-    /// ```
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
         updateBatchStateIfNeeded()
@@ -520,22 +480,12 @@ public actor UploadManager {
     /// - Parameters:
     ///   - ids: 要恢复的任务ID数组。
     ///   - extraForm: 恢复任务时可能需要的额外表单数据。默认为 `nil`。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.batchResume(ids: [taskID1, taskID2])
-    /// ```
     public func batchResume(ids: [UUID], extraForm: [String: String]? = nil) {
         for id in ids { resumeTask(id: id, extraForm: extraForm) }
         updateBatchStateIfNeeded()
     }
     /// 批量取消指定ID的上传任务。
     /// - Parameter ids: 要取消的任务ID数组。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.batchCancel(ids: [taskID1, taskID2])
-    /// ```
     public func batchCancel(ids: [UUID]) {
         for id in ids { cancelTask(id: id) }
         updateBatchStateIfNeeded()
@@ -601,7 +551,8 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response
+            response: task.response,
+            cryoResult: task.cryoResult
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -617,7 +568,8 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response
+            response: task.response,
+            cryoResult: task.cryoResult
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -633,7 +585,8 @@ public actor UploadManager {
             fileURL: task.fileURL,
             progress: task.progress,
             state: task.state,
-            response: task.response
+            response: task.response,
+            cryoResult: task.cryoResult
         )
         for delegate in delegates.allObjects {
             Task { @MainActor in
@@ -700,11 +653,6 @@ public actor UploadManager {
     ///
     /// - Parameter url: 文件的URL。
     /// - Returns: 推测出的MIME类型字符串。如果无法推测，则返回 "application/octet-stream"。
-    ///
-    /// - Example:
-    /// ```swift
-    /// let mime = UploadManager.mimeType(for: URL(fileURLWithPath: "image.jpg")) // Returns "image/jpeg"
-    /// ```
     static func mimeType(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
         switch ext {
@@ -718,5 +666,3 @@ public actor UploadManager {
         }
     }
 }
-
-
