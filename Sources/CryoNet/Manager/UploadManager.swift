@@ -1,16 +1,12 @@
 import Foundation
 import Alamofire
 
-#if os(iOS) || os(watchOS)
-import UIKit
-#endif
-
 // MARK: - 上传任务状态
 /// 上传任务的状态枚举。
 ///
 /// 定义了上传任务在其生命周期中可能经历的各种状态。
 public enum UploadState: String {
-    /// 任务处于等待状态，刚创建但尚未开始上传。
+    /// 任务处于等待状态，尚未开始上传或已完成。
     case idle
     /// 任务正在进行上传。
     case uploading
@@ -24,14 +20,14 @@ public enum UploadState: String {
     case cancelled
 }
 
-// MARK: - 批量/整体上传状态
+// MARK: - 批量/全部上传的整体状态
 /// 批量或全部上传任务的整体状态枚举。
 ///
 /// 用于表示一组上传任务的聚合状态，方便UI层进行整体展示和控制。
 public enum UploadBatchState: String {
     /// 没有上传任务，或者所有任务都处于非活动状态。
     case idle
-    /// 所有未取消的任务都在上传中。
+    /// 所有未完成的任务都在上传中。
     case uploading
     /// 所有未完成的任务都处于暂停状态。
     case paused
@@ -44,64 +40,83 @@ public enum UploadBatchState: String {
 ///
 /// 此结构体提供了上传任务的关键信息，供UI层展示和外部模块查询任务状态与详情。
 /// 它实现了 `Identifiable` 协议，方便在SwiftUI等框架中使用。
-public struct UploadTaskInfo: Identifiable {
+public struct UploadTaskInfo: Identifiable, Equatable {
+    public static func == (lhs: UploadTaskInfo, rhs: UploadTaskInfo) -> Bool {
+        lhs.id == rhs.id
+    }
     /// 任务的唯一标识符。
     public let id: UUID
-    /// 本地文件路径，表示要上传的源文件。
+    /// 本地文件路径。
     public let fileURL: URL
+    /// 上传目标接口URL。
+    public let uploadURL: URL
+    /// 表单字段名
+    public let formFieldName: String
     /// 当前上传进度，范围从0.0到1.0。
     public var progress: Double
     /// 当前任务的状态。
     public var state: UploadState
-    /// 关联的Alamofire数据请求对象。
-    ///
-    /// 如果需要获取更详细的响应信息（例如HTTP状态码、响应头等），
-    /// 可以在UI层监听此 `DataRequest` 对象的事件。
+    /// 关联的Alamofire请求对象。
     public var response: DataRequest?
-    
-    /// 关联的CryoResult对象，可用于链式响应处理
+    /// 关联的CryoResult对象。
     public var cryoResult: CryoResult?
 }
 
-// MARK: - 上传任务事件委托
-/// 上传管理器事件回调协议。
+// MARK: - 上传管理器事件委托（推荐，仅需实现UI友好型回调，无需手动刷新列表）
+/// 上传事件回调协议
 ///
-/// 此协议定义了上传任务生命周期中的各种事件回调，包括单任务进度、完成、失败，
-/// 以及整体进度和批量状态的更新。遵循此协议的对象可以接收并处理这些事件。
+/// ⚠️ legacy 方法（如 uploadProgressDidUpdate/OverallProgressDidUpdate 等）未来将被删除。
+/// 推荐使用：
+/// - uploadManagerDidUpdateActiveTasks(_:)
+/// - uploadManagerDidUpdateCompletedTasks(_:)
+/// - uploadManagerDidUpdateProgress(overallProgress:batchState:)
+///
+/// 示例用法:
+/// ```swift
+/// class MyUploadVM: ObservableObject, UploadManagerDelegate {
+///     @Published var tasks: [UploadTaskInfo] = []
+///     @Published var completed: [UploadTaskInfo] = []
+///     @Published var progress: Double = 0
+///     @Published var state: UploadBatchState = .paused
+///     func uploadManagerDidUpdateActiveTasks(_ tasks: [UploadTaskInfo]) { self.tasks = tasks }
+///     func uploadManagerDidUpdateCompletedTasks(_ tasks: [UploadTaskInfo]) { self.completed = tasks }
+///     func uploadManagerDidUpdateProgress(overallProgress: Double, batchState: UploadBatchState) {
+///         self.progress = overallProgress
+///         self.state = batchState
+///     }
+/// }
+/// ```
 public protocol UploadManagerDelegate: AnyObject {
-    /// 当单个上传任务的进度更新时调用。
-    /// - Parameter task: 包含最新进度信息的 `UploadTaskInfo` 对象。
+    /// ⚠️ legacy: 单任务进度更新（即将废弃）
     func uploadProgressDidUpdate(task: UploadTaskInfo)
-    /// 当单个上传任务成功完成时调用。
-    /// - Parameter task: 包含完成任务信息的 `UploadTaskInfo` 对象。
+    /// ⚠️ legacy: 单任务完成（即将废弃）
     func uploadDidComplete(task: UploadTaskInfo)
-    /// 当单个上传任务失败时调用。
-    /// - Parameter task: 包含失败任务信息的 `UploadTaskInfo` 对象。
+    /// ⚠️ legacy: 单任务失败（即将废弃）
     func uploadDidFail(task: UploadTaskInfo)
-    /// 当所有未取消任务的整体平均进度更新时调用。
-    ///
-    /// 每次有任何任务的进度变化时都会回调此方法。
-    /// - Parameter progress: 所有有效任务的平均进度，范围从0.0到1.0。
+    /// ⚠️ legacy: 整体进度变更（即将废弃）
     func uploadOverallProgressDidUpdate(progress: Double)
-    /// 当批量上传的整体状态发生变化时调用。
-    ///
-    /// 例如，从“上传中”变为“暂停”或“完成”。
-    /// - Parameter state: 最新的批量上传状态。
+    /// ⚠️ legacy: 批量状态变更（即将废弃）
     func uploadBatchStateDidUpdate(state: UploadBatchState)
-}
 
+    /// 所有未完成任务变化时回调（推荐）
+    func uploadManagerDidUpdateActiveTasks(_ tasks: [UploadTaskInfo])
+    /// 已完成任务变化时回调（推荐）
+    func uploadManagerDidUpdateCompletedTasks(_ tasks: [UploadTaskInfo])
+    /// 整体进度或批量状态变化时回调（推荐）
+    func uploadManagerDidUpdateProgress(overallProgress: Double, batchState: UploadBatchState)
+}
 public extension UploadManagerDelegate {
     func uploadProgressDidUpdate(task: UploadTaskInfo) {}
     func uploadDidComplete(task: UploadTaskInfo) {}
     func uploadDidFail(task: UploadTaskInfo) {}
     func uploadOverallProgressDidUpdate(progress: Double) {}
     func uploadBatchStateDidUpdate(state: UploadBatchState) {}
+    func uploadManagerDidUpdateActiveTasks(_ tasks: [UploadTaskInfo]) {}
+    func uploadManagerDidUpdateCompletedTasks(_ tasks: [UploadTaskInfo]) {}
+    func uploadManagerDidUpdateProgress(overallProgress: Double, batchState: UploadBatchState) {}
 }
 
 // MARK: - 内部上传任务结构体
-/// 内部使用的上传任务结构体。
-///
-/// 包含上传任务的详细信息，仅供 `UploadManager` 内部管理使用。
 private struct UploadTask {
     /// 任务的唯一标识符。
     let id: UUID
@@ -122,159 +137,76 @@ private struct UploadTask {
 }
 
 // MARK: - 上传管理器
-/// 支持批量/单个上传、并发控制、进度回调、整体进度回调与批量状态回调的上传管理器。
+/// 支持批量/单个上传、并发控制、进度与状态自动推送的上传管理器。
 ///
-/// 此管理器使用 Swift Actor 模型实现线程安全，并支持通过委托模式进行事件通知。
+/// - 推荐仅用 uploadManagerDidUpdateActiveTasks / uploadManagerDidUpdateCompletedTasks / uploadManagerDidUpdateProgress
+/// - 线程安全，基于 actor 实现
 ///
-/// - Note: `UploadManager` 是一个 `actor`，所有对其状态的修改都应通过异步方法进行。
-/// - SeeAlso: `UploadManagerDelegate`, `UploadTaskInfo`, `UploadState`, `UploadBatchState`
+/// ### 常用用法:
+/// ```swift
+/// let manager = UploadManager()
+/// await manager.addDelegate(self)
+/// let ids = await manager.addTasks(files: [...])
+/// await manager.batchStart(ids: ids)
+/// ```
 public actor UploadManager {
-    /// 队列的唯一标识符，便于业务区分和管理。
+    /// 队列唯一标识
     public let identifier: String
-    /// 存储所有上传任务的字典，以任务ID为键。
+    /// 全部上传任务
     private var tasks: [UUID: UploadTask] = [:]
-    /// 存储所有弱引用的事件委托对象。
+    /// 事件委托
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
-    /// 最大并发上传数。
+    /// 最大并发数
     private var maxConcurrentUploads: Int
-    /// 当前正在上传的任务数量。
+    /// 当前上传中数量
     private var currentUploadingCount: Int = 0
-    /// 等待上传的任务队列。
+    /// 等待队列
     private var pendingQueue: [UUID] = []
-    /// 默认的HTTP请求头。
-    private let headers: HTTPHeaders?
-    /// 可自定义的Alamofire请求拦截器（通过 CryoNet 适配器）
-    private var interceptor: InterceptorAdapter?
-    private var businessInterceptor: RequestInterceptorProtocol?
-    /// 最近一次的批量状态，用于防止重复回调。
+    /// 批量状态缓存
     private var lastBatchState: UploadBatchState = .idle
+    /// 总完成标记
+    private var overallCompletedCalled: Bool = false
+    private let headers: HTTPHeaders?
+    private let interceptor: RequestInterceptor?
 
     // MARK: - 初始化
-    /// 创建 `UploadManager` 实例。
-    ///
+    /// 创建上传管理器
     /// - Parameters:
-    ///   - identifier: 队列的唯一标识符。默认为一个新的UUID字符串。
-    ///   - maxConcurrentUploads: 最大并发上传数。默认为3。
-    ///   - headers: 应用于所有上传请求的默认HTTP头。默认为 `nil`。
-    ///   - interceptor: 自定义的Alamofire请求拦截器。默认为 `nil`。
-    ///   - toTokenManager: token管理器，缺省为 DefaultTokenManager
-    ///
-    /// - Example:
-    /// ```swift
-    /// let manager = UploadManager(identifier: "myUploadQueue", maxConcurrentUploads: 2)
-    /// ```
+    ///   - identifier: 队列唯一ID，默认自动生成
+    ///   - maxConcurrentUploads: 最大并发数，默认3
+    ///   - headers: 全局请求头
+    ///   - interceptor: 自定义请求拦截器
     public init(
         identifier: String = UUID().uuidString,
         maxConcurrentUploads: Int = 3,
         headers: HTTPHeaders? = nil,
-        interceptor: RequestInterceptorProtocol? = nil,
-        toTokenManager: TokenManagerProtocol = DefaultTokenManager()
+        interceptor: RequestInterceptor? = nil
     ) {
         self.identifier = identifier
         self.maxConcurrentUploads = maxConcurrentUploads
         self.headers = headers
-        var adapter: InterceptorAdapter? = nil
-        if let userInterceptor = interceptor {
-            adapter = InterceptorAdapter(
-                interceptor: userInterceptor,
-                tokenManager: toTokenManager
-            )
-        }
-        self.businessInterceptor = interceptor
-        self.interceptor = adapter
+        self.interceptor = interceptor
     }
 
-    // MARK: - 并发设置
-    /// 设置最大并发上传数。
-    ///
-    /// 更改此设置会立即影响上传队列的调度。
-    /// - Parameter count: 新的最大并发数。最小值为1。
-    ///
-    /// - Example:
-    /// ```swift
-    /// await manager.setMaxConcurrentUploads(1)
-    /// ```
-    public func setMaxConcurrentUploads(_ count: Int) {
-        self.maxConcurrentUploads = max(1, count)
-        Task { await self.checkAndStartNext() }
-    }
-
-    // MARK: - 委托管理
-    /// 添加上传事件委托对象。
-    ///
-    /// 委托对象将接收上传任务的进度和状态更新。
-    /// - Parameter delegate: 遵循 `UploadManagerDelegate` 协议的委托对象。
+    // MARK: - 事件委托注册
+    /// 添加事件委托
     public func addDelegate(_ delegate: UploadManagerDelegate) {
         delegates.add(delegate)
     }
-    /// 移除上传事件委托对象。
-    ///
-    /// 移除后，该委托对象将不再接收上传事件。
-    /// - Parameter delegate: 要移除的委托对象。
+    /// 移除事件委托
     public func removeDelegate(_ delegate: UploadManagerDelegate) {
         delegates.remove(delegate)
     }
 
-    // MARK: - 批量上传
-    /// 批量上传一组文件。
+    // MARK: - 任务注册与调度
+    /// 注册单个上传任务（初始idle，不自动上传）
     ///
-    /// 此方法会为每个文件创建一个上传任务并启动。
-    /// - Parameters:
-    ///   - uploadURL: 目标上传接口的URL。
-    ///   - fileURLs: 要上传的本地文件URL数组。
-    ///   - formFieldName: 文件在表单中的字段名。默认为 "file"。
-    ///   - extraForm: 额外的表单数据，以字典形式提供。默认为 `nil`。
-    /// - Returns: 所有启动上传任务的UUID数组。
-    ///
-    /// - Example:
-    /// ```swift
-    /// let uploadURL = URL(string: "https://api.example.com/upload")!
-    /// let file1 = URL(fileURLWithPath: "/path/to/file1.jpg")
-    /// let file2 = URL(fileURLWithPath: "/path/to/file2.png")
-    /// let taskIDs = await manager.batchUpload(uploadURL: uploadURL, fileURLs: [file1, file2])
-    /// ```
-    public func batchUpload(
-        uploadURL: URL,
-        fileURLs: [URL],
-        formFieldName: String = "file",
-        extraForm: [String: String]? = nil
-    ) async -> [UUID] {
-        var ids: [UUID] = []
-        for fileURL in fileURLs {
-            let id = await startUpload(
-                fileURL: fileURL,
-                uploadURL: uploadURL,
-                formFieldName: formFieldName,
-                extraForm: extraForm
-            )
-            ids.append(id)
-        }
-        await updateBatchStateIfNeeded()
-        return ids
-    }
-
-    // MARK: - 单任务上传
-    /// 启动一个单文件上传任务。
-    ///
-    /// - Parameters:
-    ///   - fileURL: 要上传的本地文件URL。
-    ///   - uploadURL: 目标上传接口的URL。
-    ///   - formFieldName: 文件在表单中的字段名。默认为 "file"。
-    ///   - extraForm: 额外的表单数据，以字典形式提供。默认为 `nil`。
-    /// - Returns: 新创建上传任务的唯一标识符UUID。
-    ///
-    /// - Example:
-    /// ```swift
-    /// let fileToUpload = URL(fileURLWithPath: "/path/to/my_document.pdf")
-    /// let uploadTarget = URL(string: "https://api.example.com/documents")!
-    /// let taskID = await manager.startUpload(fileURL: fileToUpload, uploadURL: uploadTarget)
-    /// ```
-    public func startUpload(
+    /// - Returns: 任务ID
+    public func addTask(
         fileURL: URL,
         uploadURL: URL,
-        formFieldName: String = "file",
-        extraForm: [String: String]? = nil
-    ) async -> UUID {
+        formFieldName: String = "file"
+    ) -> UUID {
         let id = UUID()
         let task = UploadTask(
             id: id,
@@ -287,180 +219,281 @@ public actor UploadManager {
             cryoResult: nil
         )
         tasks[id] = task
-        enqueueOrStartTask(id: id, extraForm: extraForm)
-        await updateBatchStateIfNeeded()
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
         return id
     }
+    /// 批量注册任务（初始idle）
+    public func addTasks(
+        files: [(fileURL: URL, uploadURL: URL, formFieldName: String)]
+    ) -> [UUID] {
+        var ids: [UUID] = []
+        for info in files {
+            let id = addTask(fileURL: info.fileURL, uploadURL: info.uploadURL, formFieldName: info.formFieldName)
+            ids.append(id)
+        }
+        return ids
+    }
+    /// 启动单任务（注册并立即上传）
+    public func startUpload(
+        fileURL: URL,
+        uploadURL: URL,
+        formFieldName: String = "file"
+    ) async -> UUID {
+        let id = addTask(fileURL: fileURL, uploadURL: uploadURL, formFieldName: formFieldName)
+        enqueueOrStartTask(id: id)
+        updateBatchStateIfNeeded()
+        return id
+    }
+    /// 批量上传（注册并立即上传）
+    public func batchUpload(
+        files: [(fileURL: URL, uploadURL: URL, formFieldName: String)]
+    ) async -> [UUID] {
+        var ids: [UUID] = []
+        for info in files {
+            let id = await startUpload(fileURL: info.fileURL, uploadURL: info.uploadURL, formFieldName: info.formFieldName)
+            ids.append(id)
+        }
+        return ids
+    }
+    /// 启动所有任务（idle/paused）
+    public func startAllTasks() {
+        self.batchStart(ids: allTaskIDs())
+    }
+    /// 暂停所有任务
+    public func stopAllTasks() {
+        self.batchPause(ids: allTaskIDs())
+    }
+    /// 批量启动
+    public func batchStart(ids: [UUID]) {
+        for id in ids {
+            if let task = tasks[id], task.state == .idle || task.state == .paused {
+                enqueueOrStartTask(id: id)
+            }
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    /// 批量恢复（等价于启动）
+    public func batchResume(ids: [UUID]) {
+        batchStart(ids: ids)
+    }
+    /// 批量暂停
+    public func batchPause(ids: [UUID]) {
+        for id in ids { pauseTask(id: id) }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    /// 批量取消
+    public func batchCancel(ids: [UUID]) {
+        for id in ids { cancelTask(id: id) }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    /// 设置最大并发数
+    public func setMaxConcurrentUploads(_ count: Int) {
+        self.maxConcurrentUploads = max(1, count)
+        Task { self.checkAndStartNext() }
+    }
 
-    /// 将任务加入队列或立即开始上传。
-    ///
-    /// 如果当前并发上传数未达到上限，则立即开始任务；否则，将任务加入等待队列。
-    /// - Parameters:
-    ///   - id: 任务的唯一标识符。
-    ///   - extraForm: 额外的表单数据，用于启动任务时传递。
-    private func enqueueOrStartTask(id: UUID, extraForm: [String: String]?) {
+    // MARK: - 单任务控制
+    public func startTask(id: UUID) {
+        enqueueOrStartTask(id: id)
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    public func pauseTask(id: UUID) {
+        guard var task = tasks[id] else { return }
+        guard task.state == .uploading else {
+            if task.state != .paused {
+                task.state = .paused
+                tasks[id] = task
+                notifyTaskListUpdate()
+                notifyProgressAndBatchState()
+            }
+            return
+        }
+        task.response?.suspend()
+        currentUploadingCount = max(0, currentUploadingCount - 1)
+        task.state = .paused
+        tasks[id] = task
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        Task { self.checkAndStartNext() }
+    }
+    public func resumeTask(id: UUID) {
+        guard let task = tasks[id] else {return}
+        if task.state == .paused || task.state == .idle || task.state == .failed {
+            enqueueOrStartTask(id: id)
+            notifyTaskListUpdate()
+            notifyProgressAndBatchState()
+            updateBatchStateIfNeeded()
+        }
+    }
+    public func cancelTask(id: UUID) {
+        guard var task = tasks[id] else { return }
+        if let idx = pendingQueue.firstIndex(of: id) {
+            pendingQueue.remove(at: idx)
+            task.state = .cancelled
+            tasks[id] = task
+            notifyTaskListUpdate()
+            notifyProgressAndBatchState()
+            updateBatchStateIfNeeded()
+            return
+        }
+        if task.state == .uploading {
+            task.response?.cancel()
+            currentUploadingCount = max(0, currentUploadingCount - 1)
+            Task { self.checkAndStartNext() }
+        }
+        task.state = .cancelled
+        tasks[id] = task
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    public func removeTask(id: UUID) {
+        if let task = tasks[id], task.state == .uploading || pendingQueue.contains(id) {
+            cancelTask(id: id)
+        }
+        tasks[id] = nil
+        if let idx = pendingQueue.firstIndex(of: id) {
+            pendingQueue.remove(at: idx)
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+
+    // MARK: - 私有：任务调度与上传
+    private func enqueueOrStartTask(id: UUID) {
+        guard var task = tasks[id] else { return }
+        guard task.state == .idle || task.state == .paused else { return }
         if currentUploadingCount < maxConcurrentUploads {
-            startTaskInternal(id: id, extraForm: extraForm)
+            startTaskInternal(id: id)
         } else {
             if !pendingQueue.contains(id) {
                 pendingQueue.append(id)
             }
-            updateTaskState(id: id, state: .idle)
+            task.state = .idle
+            tasks[id] = task
         }
-        updateBatchStateIfNeeded()
     }
-
-    /// 启动指定ID的任务。
-    ///
-    /// 此方法会尝试启动一个处于等待或暂停状态的任务。
-    /// - Parameters:
-    ///   - id: 要启动的任务的唯一标识符。
-    ///   - extraForm: 额外的表单数据，用于启动任务时传递。默认为 `nil`。
-    public func startTask(id: UUID, extraForm: [String: String]? = nil) {
-        enqueueOrStartTask(id: id, extraForm: extraForm)
-        updateBatchStateIfNeeded()
-    }
-
-    /// 内部方法：真正开始一个上传任务。
-    ///
-    /// 处理任务状态更新、并发计数、Alamofire请求的创建和回调设置。
-    /// - Parameters:
-    ///   - id: 要开始的任务的唯一标识符。
-    ///   - extraForm: 额外的表单数据，用于构建multipart请求。
-    private func startTaskInternal(id: UUID, extraForm: [String: String]?) {
-        guard let task = tasks[id] else { return }
-        guard task.state == .idle || task.state == .paused else { return }
-        var currentTask = task
+    private func startTaskInternal(id: UUID) {
+        guard var currentTask = tasks[id] else { return }
+        guard currentTask.state == .idle || currentTask.state == .paused else { return }
         currentTask.state = .uploading
+        tasks[id] = currentTask
 
         currentUploadingCount += 1
 
         let request = AF.upload(
-            multipartFormData: { multipartFormData in
-                if let data = try? Data(contentsOf: currentTask.fileURL) {
-                    multipartFormData.append(data, withName: currentTask.formFieldName, fileName: currentTask.fileURL.lastPathComponent, mimeType: Self.mimeType(for: currentTask.fileURL))
-                }
-                extraForm?.forEach { key, value in
-                    multipartFormData.append(Data(value.utf8), withName: key)
-                }
+            multipartFormData: { multipart in
+                multipart.append(currentTask.fileURL, withName: currentTask.formFieldName)
             },
             to: currentTask.uploadURL,
-            method: .post,
             headers: headers,
             interceptor: interceptor
         )
         .uploadProgress { [weak self] progress in
             Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
         }
-        .response { [weak self] _ in
-            Task { await self?.onComplete(id: id) }
+        .response { [weak self] response in
+            Task { await self?.onComplete(id: id, response: response) }
         }
-//        currentTask.cryoResult = CryoResult(request: request, interceptor: self.interceptor)
-        // 假设 businessInterceptor: RequestInterceptorProtocol?
-        currentTask.cryoResult = CryoResult(request: request, interceptor: self.businessInterceptor)
+        currentTask.cryoResult = nil
         currentTask.response = request
         tasks[id] = currentTask
-        notifyProgress(currentTask)
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
     }
-
-    // MARK: - 任务控制
-    /// 暂停指定ID的上传任务。
-    ///
-    /// 如果任务正在上传，会减少当前上传计数并尝试启动下一个等待任务。
-    /// - Parameter id: 要暂停的任务的唯一标识符。
-    public func pauseTask(id: UUID) {
-        guard var task = tasks[id], let request = task.response else { return }
-        request.suspend()
-        if task.state == .uploading {
-            currentUploadingCount = max(0, currentUploadingCount - 1)
-            Task { await self.checkAndStartNext() }
+    private func checkAndStartNext() {
+        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
+            let nextId = pendingQueue.removeFirst()
+            if let task = tasks[nextId], task.state == .idle {
+                startTaskInternal(id: nextId)
+            }
         }
-        task.state = .paused
-        tasks[id] = task
-        notifyProgress(task)
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
+        notifyProgressAndBatchState()
     }
 
-    /// 恢复指定ID的上传任务。
-    ///
-    /// 只有当任务处于暂停状态时才能恢复。
-    /// - Parameters:
-    ///   - id: 要恢复的任务的唯一标识符。
-    ///   - extraForm: 恢复任务时可能需要的额外表单数据。默认为 `nil`。
-    public func resumeTask(id: UUID, extraForm: [String: String]? = nil) {
-        guard let task = tasks[id] else { return }
-        if task.state == .paused {
-            enqueueOrStartTask(id: id, extraForm: extraForm)
-            updateBatchStateIfNeeded()
+    // MARK: - 上传事件处理
+    private func onProgress(id: UUID, progress: Double) {
+        guard var currentTask = tasks[id] else { return }
+        currentTask.progress = progress
+        if currentTask.state == .uploading {
+            tasks[id] = currentTask
+            notifyTaskListUpdate()
+            notifyProgressAndBatchState()
         }
     }
+    private func onComplete(id: UUID, response: AFDataResponse<Data?>) async {
+        guard var currentTask = tasks[id] else { return }
+        currentUploadingCount = max(0, currentUploadingCount - 1)
+        defer { Task { self.checkAndStartNext() } }
 
-    /// 取消指定ID的上传任务。
-    ///
-    /// 如果任务在等待队列中，则直接移除；如果正在上传，则取消Alamofire请求。
-    /// - Parameter id: 要取消的任务的唯一标识符。
-    public func cancelTask(id: UUID) {
-        if let idx = pendingQueue.firstIndex(of: id) {
-            pendingQueue.remove(at: idx)
-            updateTaskState(id: id, state: .cancelled)
-            notifyProgress(tasks[id]!)
-            notifyOverallProgress()
-            updateBatchStateIfNeeded()
-            return
+        if response.error != nil {
+            currentTask.state = .failed
+            tasks[id] = currentTask
+        } else {
+            currentTask.progress = 1.0
+            currentTask.state = .completed
+            tasks[id] = currentTask
         }
-        guard var task = tasks[id], let request = task.response else { return }
-        request.cancel()
-        if task.state == .uploading {
-            currentUploadingCount = max(0, currentUploadingCount - 1)
-            Task { await self.checkAndStartNext() }
-        }
-        task.state = .cancelled
-        tasks[id] = task
-        notifyProgress(task)
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
     }
 
-    /// 移除指定ID的上传任务。
-    ///
-    /// 此操作会从管理器中完全删除任务，但不会取消正在进行的上传。
-    /// 通常在任务完成后调用。
-    /// - Parameter id: 要移除的任务的唯一标识符。
-    public func removeTask(id: UUID) {
-        tasks[id] = nil
-        if let idx = pendingQueue.firstIndex(of: id) {
-            pendingQueue.remove(at: idx)
+    // MARK: - 事件派发(自动推送任务列表与进度)
+    /// 推送未完成和已完成任务列表
+    private func notifyTaskListUpdate() {
+        let all = allTaskInfos()
+        let active = all.filter { $0.state != .completed && $0.state != .cancelled }
+        let completed = all.filter { $0.state == .completed }
+        for delegate in delegates.allObjects {
+            Task { @MainActor in
+                (delegate as? UploadManagerDelegate)?.uploadManagerDidUpdateActiveTasks(active)
+                (delegate as? UploadManagerDelegate)?.uploadManagerDidUpdateCompletedTasks(completed)
+            }
         }
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
+    }
+    /// 推送整体进度和批量状态
+    private func notifyProgressAndBatchState() {
+        let progress = calcOverallProgress()
+        let batch = calcBatchState()
+        for delegate in delegates.allObjects {
+            Task { @MainActor in
+                (delegate as? UploadManagerDelegate)?.uploadManagerDidUpdateProgress(overallProgress: progress, batchState: batch)
+                // legacy兼容
+                (delegate as? UploadManagerDelegate)?.uploadOverallProgressDidUpdate(progress: progress)
+                (delegate as? UploadManagerDelegate)?.uploadBatchStateDidUpdate(state: batch)
+            }
+        }
+        if isOverallCompleted(), !overallCompletedCalled {
+            overallCompletedCalled = true
+        } else if !isOverallCompleted() && overallCompletedCalled {
+            overallCompletedCalled = false
+        }
+    }
+    private func updateBatchStateIfNeeded() {
+        let newState = calcBatchState()
+        if newState != lastBatchState {
+            lastBatchState = newState
+            notifyProgressAndBatchState()
+        }
     }
 
-    // MARK: - 状态查询
-    /// 获取指定ID上传任务的公开信息。
-    /// - Parameter id: 任务的唯一标识符。
-    /// - Returns: 包含任务信息的 `UploadTaskInfo` 对象，如果任务不存在则返回 `nil`。
-    public func getTaskInfo(id: UUID) -> UploadTaskInfo? {
-        guard let task = tasks[id] else { return nil }
-        return UploadTaskInfo(
-            id: task.id,
-            fileURL: task.fileURL,
-            progress: task.progress,
-            state: task.state,
-            response: task.response,
-            cryoResult: task.cryoResult
-        )
-    }
-
-    /// 获取所有上传任务的公开信息。
-    /// - Returns: 包含所有任务信息的 `UploadTaskInfo` 数组。
+    // MARK: - 状态/查询接口
+    /// 获取所有任务信息
     public func allTaskInfos() -> [UploadTaskInfo] {
         return tasks.values.map {
             UploadTaskInfo(
                 id: $0.id,
                 fileURL: $0.fileURL,
+                uploadURL: $0.uploadURL,
+                formFieldName: $0.formFieldName,
                 progress: $0.progress,
                 state: $0.state,
                 response: $0.response,
@@ -468,201 +501,48 @@ public actor UploadManager {
             )
         }
     }
-
-    // MARK: - 批量控制
-    /// 批量暂停指定ID的上传任务。
-    /// - Parameter ids: 要暂停的任务ID数组。
-    public func batchPause(ids: [UUID]) {
-        for id in ids { pauseTask(id: id) }
-        updateBatchStateIfNeeded()
+    /// 获取所有任务ID
+    public func allTaskIDs() -> [UUID] {
+        return Array(tasks.keys)
     }
-    /// 批量恢复指定ID的上传任务。
-    /// - Parameters:
-    ///   - ids: 要恢复的任务ID数组。
-    ///   - extraForm: 恢复任务时可能需要的额外表单数据。默认为 `nil`。
-    public func batchResume(ids: [UUID], extraForm: [String: String]? = nil) {
-        for id in ids { resumeTask(id: id, extraForm: extraForm) }
-        updateBatchStateIfNeeded()
-    }
-    /// 批量取消指定ID的上传任务。
-    /// - Parameter ids: 要取消的任务ID数组。
-    public func batchCancel(ids: [UUID]) {
-        for id in ids { cancelTask(id: id) }
-        updateBatchStateIfNeeded()
-    }
-
-    // MARK: - 并发队列调度
-    /// 检查并启动等待队列中的下一个任务。
-    ///
-    /// 当有上传任务完成或暂停时，此方法会被调用以维持最大并发数。
-    private func checkAndStartNext() {
-        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
-            let nextId = pendingQueue.removeFirst()
-            startTaskInternal(id: nextId, extraForm: nil)
-        }
-        updateBatchStateIfNeeded()
-    }
-
-    // MARK: - 上传事件回调
-    /// 处理单个任务的进度更新。
-    /// - Parameters:
-    ///   - id: 任务的唯一标识符。
-    ///   - progress: 当前进度值。
-    private func onProgress(id: UUID, progress: Double) {
-        guard var currentTask = tasks[id] else { return }
-        currentTask.progress = progress
-        currentTask.state = .uploading
-        tasks[id] = currentTask
-        notifyProgress(currentTask)
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
-    }
-
-    /// 处理单个任务的完成。
-    /// - Parameter id: 任务的唯一标识符。
-    private func onComplete(id: UUID) async {
-        guard var currentTask = tasks[id] else { return }
-        currentUploadingCount = max(0, currentUploadingCount - 1)
-        defer { Task { await self.checkAndStartNext() } }
-        currentTask.progress = 1.0
-        currentTask.state = .completed
-        tasks[id] = currentTask
-        notifyCompletion(currentTask)
-        notifyOverallProgress()
-        updateBatchStateIfNeeded()
-    }
-
-    /// 更新内部任务的状态。
-    /// - Parameters:
-    ///   - id: 任务的唯一标识符。
-    ///   - state: 要设置的新状态。
-    private func updateTaskState(id: UUID, state: UploadState) {
-        guard var task = tasks[id] else { return }
-        task.state = state
-        tasks[id] = task
-    }
-
-    // MARK: - 代理回调（保证主线程回调，防止 SwiftUI 线程警告）
-    /// 通知所有委托对象单个任务的进度更新。
-    /// - Parameter task: 包含最新进度信息的内部任务对象。
-    private func notifyProgress(_ task: UploadTask) {
-        let info = UploadTaskInfo(
+    /// 获取单个任务信息
+    public func getTaskInfo(id: UUID) -> UploadTaskInfo? {
+        guard let task = tasks[id] else { return nil }
+        return UploadTaskInfo(
             id: task.id,
             fileURL: task.fileURL,
+            uploadURL: task.uploadURL,
+            formFieldName: task.formFieldName,
             progress: task.progress,
             state: task.state,
             response: task.response,
             cryoResult: task.cryoResult
         )
-        for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? UploadManagerDelegate)?.uploadProgressDidUpdate(task: info)
-            }
-        }
-    }
-    /// 通知所有委托对象单个任务的完成。
-    /// - Parameter task: 包含完成任务信息的内部任务对象。
-    private func notifyCompletion(_ task: UploadTask) {
-        let info = UploadTaskInfo(
-            id: task.id,
-            fileURL: task.fileURL,
-            progress: task.progress,
-            state: task.state,
-            response: task.response,
-            cryoResult: task.cryoResult
-        )
-        for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? UploadManagerDelegate)?.uploadDidComplete(task: info)
-            }
-        }
-    }
-    /// 通知所有委托对象单个任务的失败。
-    /// - Parameter task: 包含失败任务信息的内部任务对象。
-    private func notifyFailure(_ task: UploadTask) {
-        let info = UploadTaskInfo(
-            id: task.id,
-            fileURL: task.fileURL,
-            progress: task.progress,
-            state: task.state,
-            response: task.response,
-            cryoResult: task.cryoResult
-        )
-        for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? UploadManagerDelegate)?.uploadDidFail(task: info)
-            }
-        }
     }
 
-    // MARK: - 整体进度与整体完成
-    /// 计算所有有效（未取消）任务的整体平均进度。
-    /// - Returns: 整体平均进度，范围从0.0到1.0。如果没有有效任务，则返回1.0。
+    // MARK: - 进度/批量状态计算
     private func calcOverallProgress() -> Double {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         guard !validTasks.isEmpty else { return 1.0 }
         let sum = validTasks.map { min($0.progress, 1.0) }.reduce(0, +)
         return sum / Double(validTasks.count)
     }
-
-    /// 判断所有有效（未取消）任务是否都已完成。
-    /// - Returns: 如果所有有效任务都已完成，则返回 `true`；否则返回 `false`。
     private func isOverallCompleted() -> Bool {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
     }
-
-    /// 计算批量上传的整体状态。
-    /// - Returns: 当前的 `UploadBatchState`。
     private func calcBatchState() -> UploadBatchState {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         if validTasks.isEmpty { return .idle }
-        if validTasks.allSatisfy({ $0.state == .completed }) { return .completed }
-        if validTasks.allSatisfy({ $0.state == .paused }) { return .paused }
-        if validTasks.allSatisfy({ $0.state == .uploading }) { return .uploading }
+        let completedCount = validTasks.filter { $0.state == .completed }.count
+        let pausedCount = validTasks.filter { $0.state == .paused }.count
+        let uploadingCount = validTasks.filter { $0.state == .uploading }.count
+        let idleCount = validTasks.filter { $0.state == .idle }.count
+        if completedCount == validTasks.count { return .completed }
+        if pausedCount == validTasks.count { return .paused }
+        if uploadingCount > 0 { return .uploading }
+        if idleCount > 0 && uploadingCount == 0 && pausedCount == 0 { return .idle }
+        if pausedCount > 0 && uploadingCount == 0 { return .paused }
         return .idle
-    }
-
-    /// 检查并通知批量上传状态变更。
-    ///
-    /// 如果当前批量状态与上次记录的状态不同，则通知所有委托对象。
-    private func updateBatchStateIfNeeded() {
-        let newState = calcBatchState()
-        if newState != lastBatchState {
-            lastBatchState = newState
-            for delegate in delegates.allObjects {
-                Task { @MainActor in
-                    (delegate as? UploadManagerDelegate)?.uploadBatchStateDidUpdate(state: newState)
-                }
-            }
-        }
-    }
-
-    /// 通知所有委托对象整体上传进度更新。
-    private func notifyOverallProgress() {
-        let progress = calcOverallProgress()
-        for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? UploadManagerDelegate)?.uploadOverallProgressDidUpdate(progress: progress)
-            }
-        }
-    }
-
-    // MARK: - 工具方法
-    /// 根据文件扩展名推测MIME类型。
-    ///
-    /// - Parameter url: 文件的URL。
-    /// - Returns: 推测出的MIME类型字符串。如果无法推测，则返回 "application/octet-stream"。
-    static func mimeType(for url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "jpg", "jpeg": return "image/jpeg"
-        case "png": return "image/png"
-        case "gif": return "image/gif"
-        case "mp4": return "video/mp4"
-        case "mov": return "video/quicktime"
-        case "pdf": return "application/pdf"
-        default: return "application/octet-stream"
-        }
     }
 }
