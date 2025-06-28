@@ -615,12 +615,14 @@ public actor DownloadManager {
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
     }
     /// 计算批量状态
+    ///
+    /// 只要有任务处于 downloading 状态，则整体视为 downloading，否则全部 paused/completed/idle。
     private func calcBatchState() -> DownloadBatchState {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         if validTasks.isEmpty { return .idle }
         if validTasks.allSatisfy({ $0.state == .completed }) { return .completed }
         if validTasks.allSatisfy({ $0.state == .paused }) { return .paused }
-        if validTasks.allSatisfy({ $0.state == .downloading }) { return .downloading }
+        if validTasks.contains(where: { $0.state == .downloading }) { return .downloading }
         return .idle
     }
 
