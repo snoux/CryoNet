@@ -282,26 +282,26 @@ public actor DownloadManager {
     ///
     /// - Parameters:
     ///   - baseURL: 基础下载URL
-    ///   - fileNames: 文件名数组
+    ///   - filePaths: 文件路径(会与baseURL拼接 最终结果:baseURL+filePath)
     ///   - destinationFolder: 保存目录(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID数组
     ///
     /// ### 使用示例
     /// ```
-    /// let ids = await manager.batchDownload(baseURL: url, fileNames: ["1.png", "2.png"])
+    /// let ids = await manager.batchDownload(baseURL: url, filePaths: ["1.png", "2.png"])
     /// ```
     public func batchDownload(
         baseURL: URL,
-        fileNames: [String],
+        filePaths: [String],
         destinationFolder: URL? = nil,
         saveToAlbum: Bool = false
     ) async -> [UUID] {
         var ids: [UUID] = []
-        for name in fileNames {
-            let fileURL = baseURL.appendingPathComponent(name)
+        for path in filePaths {
+            let fileURL = baseURL.appendingPathComponent(path)
             let destFolder = destinationFolder ?? Self.defaultDownloadFolder()
-            let destURL = destFolder.appendingPathComponent(name)
+            let destURL = destFolder.appendingPathComponent(fileURL.lastPathComponent)
             let id = await startDownload(from: fileURL, to: destURL, saveToAlbum: saveToAlbum)
             ids.append(id)
         }
