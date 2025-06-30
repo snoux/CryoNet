@@ -46,11 +46,9 @@ public enum DownloadBatchState: String {
 /// 此结构体提供了下载任务的关键信息，供UI层展示和外部模块查询任务状态与详情。
 /// 它实现了 `Identifiable` 协议，方便在SwiftUI等框架中使用。
 public struct DownloadTaskInfo: Identifiable, Equatable {
-    /// 判断两个任务是否相同（通过ID）
     public static func == (lhs: DownloadTaskInfo, rhs: DownloadTaskInfo) -> Bool {
         lhs.id == rhs.id
     }
-    
     /// 任务的唯一标识符。
     public let id: UUID
     /// 下载资源的URL。
@@ -63,7 +61,7 @@ public struct DownloadTaskInfo: Identifiable, Equatable {
     public var destination: URL
     /// 关联的Alamofire下载请求对象。
     public var response: DownloadRequest?
-    /// 关联的CryoResult对象，可用于链式响应处理
+    /// 关联的CryoResult对象，可用于链式响应处理。
     public var cryoResult: CryoResult?
 }
 
@@ -135,7 +133,6 @@ private struct DownloadTask {
 /// - Note: 推荐仅在主UI层持有DownloadManager实例，避免多实例并发下载同一文件。
 /// - SeeAlso: ``DownloadManagerDelegate``, ``DownloadTaskInfo``
 public actor DownloadManager {
-    /// 下载队列唯一标识
     public let identifier: String
     private var tasks: [UUID: DownloadTask] = [:]
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
@@ -147,7 +144,7 @@ public actor DownloadManager {
     private let headers: HTTPHeaders?
     private let interceptor: RequestInterceptor?
     private let businessInterceptor: RequestInterceptorProtocol?
-    
+
     /// 创建下载管理器
     ///
     /// - Parameters:
@@ -155,6 +152,11 @@ public actor DownloadManager {
     ///   - maxConcurrentDownloads: 最大并发数，默认3
     ///   - headers: 全局请求头
     ///   - interceptor: 业务拦截器
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let manager = DownloadManager()
+    /// ```
     public init(
         identifier: String = UUID().uuidString,
         maxConcurrentDownloads: Int = 3,
@@ -167,21 +169,30 @@ public actor DownloadManager {
         self.businessInterceptor = interceptor
         self.interceptor = nil
     }
-    
+
     // MARK: - 事件委托注册
-    
+
     /// 添加事件委托
+    ///
     /// - Parameter delegate: 订阅者
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.addDelegate(self)
+    /// ```
     public func addDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.add(delegate)
     }
+
     /// 移除事件委托
+    ///
+    /// - Parameter delegate: 订阅者
     public func removeDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.remove(delegate)
     }
-    
+
     // MARK: - 任务注册与调度
-    
+
     /// 注册单个任务（初始idle）
     ///
     /// - Parameters:
@@ -189,6 +200,12 @@ public actor DownloadManager {
     ///   - destination: 保存路径(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let id = manager.addTask(url: url)
+    /// ```
+    /// - Note: 只注册任务，不自动开始下载。
     public func addTask(
         url: URL,
         destination: URL? = nil,
@@ -211,7 +228,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         return id
     }
-    
+
     /// 批量注册任务（初始idle）
     ///
     /// - Parameters:
@@ -219,6 +236,11 @@ public actor DownloadManager {
     ///   - destinationFolder: 保存目录(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID数组
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let ids = manager.addTasks(urls: [url1, url2])
+    /// ```
     public func addTasks(
         urls: [URL],
         destinationFolder: URL? = nil,
@@ -232,7 +254,7 @@ public actor DownloadManager {
         }
         return ids
     }
-    
+
     /// 启动单任务（注册并立即下载）
     ///
     /// - Parameters:
@@ -240,6 +262,11 @@ public actor DownloadManager {
     ///   - destination: 保存路径(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let id = await manager.startDownload(from: url)
+    /// ```
     public func startDownload(
         from url: URL,
         to destination: URL? = nil,
@@ -250,7 +277,7 @@ public actor DownloadManager {
         await updateBatchStateIfNeeded()
         return id
     }
-    
+
     /// 批量下载（注册并立即下载）
     ///
     /// - Parameters:
@@ -259,6 +286,11 @@ public actor DownloadManager {
     ///   - destinationFolder: 保存目录(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID数组
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let ids = await manager.batchDownload(baseURL: url, fileNames: ["1.png", "2.png"])
+    /// ```
     public func batchDownload(
         baseURL: URL,
         fileNames: [String],
@@ -275,7 +307,7 @@ public actor DownloadManager {
         }
         return ids
     }
-    
+
     /// 启动所有任务（idle/paused）
     public func startAllTasks() {
         self.batchStart(ids: allTaskIDs())
@@ -284,7 +316,9 @@ public actor DownloadManager {
     public func stopAllTasks() {
         self.batchPause(ids: allTaskIDs())
     }
-    /// 批量启动
+    /// 批量启动任务
+    ///
+    /// - Parameter ids: 需要启动的任务ID数组
     public func batchStart(ids: [UUID]) {
         for id in ids {
             if let task = tasks[id], task.state == .idle || task.state == .paused {
@@ -295,48 +329,82 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 批量恢复（等价于启动）
+    /// 批量恢复任务（等价于批量启动）
+    ///
+    /// - Parameter ids: 需要恢复的任务ID数组
     public func batchResume(ids: [UUID]) {
         batchStart(ids: ids)
     }
-    /// 批量暂停
+    /// 批量暂停任务
+    ///
+    /// - Parameter ids: 需要暂停的任务ID数组
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 批量取消（可选是否删除本地文件，默认不删）
+    /// 批量取消任务
+    ///
+    /// - Parameters:
+    ///   - ids: 需要取消的任务ID数组
+    ///   - shouldDeleteFile: 是否删除本地文件（默认不删除）
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.batchCancel(ids: [id1, id2], shouldDeleteFile: true)
+    /// ```
     public func batchCancel(ids: [UUID], shouldDeleteFile: Bool = false) {
         for id in ids { cancelTask(id: id, shouldDeleteFile: shouldDeleteFile) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 批量移除（可选是否删除本地文件，默认删除）
+    /// 批量移除任务
+    ///
+    /// - Parameters:
+    ///   - ids: 需要移除的任务ID数组
+    ///   - shouldDeleteFile: 是否删除本地文件（默认删除）
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.batchRemove(ids: [id1, id2])
+    /// manager.batchRemove(ids: [id1, id2], shouldDeleteFile: false)
+    /// ```
     public func batchRemove(ids: [UUID], shouldDeleteFile: Bool = true) {
         for id in ids { removeTask(id: id, shouldDeleteFile: shouldDeleteFile) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 设置最大并发数
+    /// 设置最大并发下载数
+    ///
     /// - Parameter count: 新的并发数，最小1
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.setMaxConcurrentDownloads(5)
+    /// ```
     public func setMaxConcurrentDownloads(_ count: Int) {
         self.maxConcurrentDownloads = max(1, count)
         Task { await self.checkAndStartNext() }
     }
-    
+
     // MARK: - 单任务控制
-    
+
     /// 启动单任务
+    ///
+    /// - Parameter id: 任务ID
     public func startTask(id: UUID) {
         enqueueOrStartTask(id: id)
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
+
     /// 暂停单任务
+    ///
+    /// - Parameter id: 任务ID
     public func pauseTask(id: UUID) {
         guard var task = tasks[id] else { return }
         guard task.state == .downloading else {
@@ -356,7 +424,10 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         Task { await self.checkAndStartNext() }
     }
+
     /// 恢复单任务
+    ///
+    /// - Parameter id: 任务ID
     public func resumeTask(id: UUID) {
         guard let task = tasks[id] else {return}
         if task.state == .paused || task.state == .idle || task.state == .failed {
@@ -366,11 +437,21 @@ public actor DownloadManager {
             updateBatchStateIfNeeded()
         }
     }
-    /// 取消单任务
-    /// 停止下载但保留任务记录
-    /// 可选是否删除本地已下载文件
+
+    /// 取消单个任务
     ///
-    /// - Note: 保留任务记录,但无法恢复下载.需重新创建任务
+    /// - Parameters:
+    ///   - id: 任务ID
+    ///   - shouldDeleteFile: 是否删除本地已下载文件（默认不删）
+    ///
+    /// - Note: 仅取消下载并保留任务记录，无法恢复下载，需重新创建任务。
+    /// - SeeAlso: ``removeTask(id:shouldDeleteFile:)``
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.cancelTask(id: taskId)
+    /// manager.cancelTask(id: taskId, shouldDeleteFile: true)
+    /// ```
     public func cancelTask(id: UUID, shouldDeleteFile: Bool = false) {
         guard var task = tasks[id] else { return }
         if let idx = pendingQueue.firstIndex(of: id) {
@@ -403,17 +484,24 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
+
     /// 移除任务
-    /// 完全删除任务和本地文件（可选,默认删除）
     ///
-    /// - Note: 完全删除,无法恢复下载.
+    /// - Parameters:
+    ///   - id: 任务ID
+    ///   - shouldDeleteFile: 是否删除本地文件（默认删除）
+    ///
+    /// - Note: 完全删除任务及本地文件，无法恢复。
+    /// - SeeAlso: ``cancelTask(id:shouldDeleteFile:)``
+    ///
+    /// ### 使用示例
+    /// ```
+    /// manager.removeTask(id: taskId)
+    /// manager.removeTask(id: taskId, shouldDeleteFile: false)
+    /// ```
     public func removeTask(id: UUID, shouldDeleteFile: Bool = true) {
-        if let task = tasks[id], task.state == .downloading || pendingQueue.contains(id) {
-            cancelTask(id: id, shouldDeleteFile: shouldDeleteFile)
-        }
-        if let task = tasks[id], shouldDeleteFile, FileManager.default.fileExists(atPath: task.destination.path) {
-            try? FileManager.default.removeItem(at: task.destination)
-        }
+        // 始终统一通过 cancelTask 做状态和文件处理，避免重复删除
+        cancelTask(id: id, shouldDeleteFile: shouldDeleteFile)
         tasks[id] = nil
         if let idx = pendingQueue.firstIndex(of: id) {
             pendingQueue.remove(at: idx)
@@ -422,11 +510,12 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    
-    
+
     // MARK: - 私有：任务调度与下载
-    
-    /// 尝试立即启动任务，否则排队
+
+    /// 将任务加入队列或立即启动
+    ///
+    /// - Parameter id: 任务ID
     private func enqueueOrStartTask(id: UUID) {
         guard var task = tasks[id] else { return }
         guard task.state == .idle || task.state == .paused else { return }
@@ -440,7 +529,10 @@ public actor DownloadManager {
             tasks[id] = task
         }
     }
-    /// 内部下载启动
+
+    /// 内部启动任务
+    ///
+    /// - Parameter id: 任务ID
     private func startTaskInternal(id: UUID) {
         guard var currentTask = tasks[id] else { return }
         guard currentTask.state == .idle || currentTask.state == .paused else { return }
@@ -451,7 +543,7 @@ public actor DownloadManager {
             (destinationURL, [.createIntermediateDirectories, .removePreviousFile])
         }
         currentDownloadingCount += 1
-        
+
         let request = AF.download(
             currentTask.url,
             method: .get,
@@ -469,7 +561,8 @@ public actor DownloadManager {
         currentTask.response = request
         tasks[id] = currentTask
     }
-    /// 检查等待队列
+
+    /// 检查等待队列，尝试启动下一个任务
     private func checkAndStartNext() {
         while currentDownloadingCount < maxConcurrentDownloads, !pendingQueue.isEmpty {
             let nextId = pendingQueue.removeFirst()
@@ -479,9 +572,14 @@ public actor DownloadManager {
         }
         notifyProgressAndBatchState()
     }
-    
+
     // MARK: - 下载事件处理
-    /// 进度回调
+
+    /// 下载进度回调
+    ///
+    /// - Parameters:
+    ///   - id: 任务ID
+    ///   - progress: 当前进度（0.0~1.0）
     private func onProgress(id: UUID, progress: Double) {
         guard var currentTask = tasks[id] else { return }
         currentTask.progress = progress
@@ -492,12 +590,17 @@ public actor DownloadManager {
             notifySingleTaskUpdate(currentTask)
         }
     }
-    /// 完成回调
+
+    /// 下载完成回调
+    ///
+    /// - Parameters:
+    ///   - id: 任务ID
+    ///   - response: 下载响应
     private func onComplete(id: UUID, response: AFDownloadResponse<Data>) async {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         defer { Task { await self.checkAndStartNext() } }
-        
+
         if let _ = response.error {
             currentTask.state = .failed
             tasks[id] = currentTask
@@ -517,8 +620,10 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         notifySingleTaskUpdate(currentTask)
     }
-    
-    /// 推送单任务更新
+
+    /// 推送单任务更新事件
+    ///
+    /// - Parameter task: 内部任务结构体
     private func notifySingleTaskUpdate(_ task: DownloadTask) {
         let info = DownloadTaskInfo(
             id: task.id,
@@ -535,8 +640,9 @@ public actor DownloadManager {
             }
         }
     }
-    
+
     // MARK: - 事件派发
+
     /// 推送未完成和已完成任务列表
     private func notifyTaskListUpdate() {
         let all = allTaskInfos()
@@ -549,6 +655,7 @@ public actor DownloadManager {
             }
         }
     }
+
     /// 推送整体进度和批量状态
     private func notifyProgressAndBatchState() {
         let progress = calcOverallProgress()
@@ -569,6 +676,7 @@ public actor DownloadManager {
             overallCompletedCalled = false
         }
     }
+
     /// 检查并推送批量状态
     private func updateBatchStateIfNeeded() {
         let newState = calcBatchState()
@@ -577,10 +685,12 @@ public actor DownloadManager {
             notifyProgressAndBatchState()
         }
     }
-    
+
     // MARK: - 状态/查询接口
-    
+
     /// 获取所有任务信息
+    ///
+    /// - Returns: 所有任务的 DownloadTaskInfo 数组
     public func allTaskInfos() -> [DownloadTaskInfo] {
         return tasks.values.map {
             DownloadTaskInfo(
@@ -594,11 +704,18 @@ public actor DownloadManager {
             )
         }
     }
+
     /// 获取所有任务ID
+    ///
+    /// - Returns: 所有任务ID数组
     public func allTaskIDs() -> [UUID] {
         return Array(tasks.keys)
     }
+
     /// 获取单个任务信息
+    ///
+    /// - Parameter id: 任务ID
+    /// - Returns: 任务信息 DownloadTaskInfo 或 nil
     public func getTaskInfo(id: UUID) -> DownloadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return DownloadTaskInfo(
@@ -611,23 +728,30 @@ public actor DownloadManager {
             cryoResult: task.cryoResult
         )
     }
-    
+
     // MARK: - 进度/批量状态计算
+
     /// 计算所有未取消任务的平均进度
+    ///
+    /// - Returns: 平均进度
     private func calcOverallProgress() -> Double {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         guard !validTasks.isEmpty else { return 1.0 }
         let sum = validTasks.map { min($0.progress, 1.0) }.reduce(0, +)
         return sum / Double(validTasks.count)
     }
+
     /// 检查所有未取消任务是否全部完成
+    ///
+    /// - Returns: 是否全部完成
     private func isOverallCompleted() -> Bool {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
     }
+
     /// 计算批量状态
     ///
-    /// 只要有任务处于 downloading 状态，则整体视为 downloading，否则全部 paused/completed/idle。
+    /// - Returns: 批量下载状态
     private func calcBatchState() -> DownloadBatchState {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         if validTasks.isEmpty { return .idle }
@@ -636,9 +760,17 @@ public actor DownloadManager {
         if validTasks.contains(where: { $0.state == .downloading }) { return .downloading }
         return .idle
     }
-    
+
     // MARK: - 文件管理辅助
+
     /// 获取默认下载目录
+    ///
+    /// - Returns: 下载目录URL
+    ///
+    /// ### 使用示例
+    /// ```
+    /// let folder = DownloadManager.defaultDownloadFolder()
+    /// ```
     private static func defaultDownloadFolder() -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let downloadsFolder = documentsPath.appendingPathComponent("Downloads")
@@ -647,8 +779,12 @@ public actor DownloadManager {
         }
         return downloadsFolder
     }
-    
+
     /// 下载完成后保存到相册（仅支持图片/视频）
+    ///
+    /// - Parameter fileURL: 文件本地路径
+    ///
+    /// - Note: 只会保存图片/视频到相册，非媒体文件不处理。
     private static func saveToAlbumIfNeeded(fileURL: URL) async {
 #if os(iOS) || os(watchOS) || os(macOS)
         let fileExtension = fileURL.pathExtension.lowercased()
@@ -673,6 +809,11 @@ public actor DownloadManager {
 #endif
     }
 #if os(iOS) || os(watchOS) || os(macOS)
+    /// 实际保存到系统相册
+    ///
+    /// - Parameters:
+    ///   - fileURL: 本地文件路径
+    ///   - isVideo: 是否为视频
     private static func performSaveToAlbum(fileURL: URL, isVideo: Bool) {
         PHPhotoLibrary.shared().performChanges {
             if isVideo {
