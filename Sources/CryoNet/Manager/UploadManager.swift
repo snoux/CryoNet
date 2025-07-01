@@ -2,118 +2,76 @@ import Foundation
 import Alamofire
 
 // MARK: - 上传任务状态
-/// 上传任务的状态枚举。
-///
-/// 定义了上传任务在其生命周期中可能经历的各种状态。
 public enum UploadState: String {
-    /// 任务处于等待状态，尚未开始上传或已完成。
     case idle
-    /// 任务正在进行上传
     case uploading
-    /// 任务已暂停，可以恢复
     case paused
-    /// 任务已成功完成上传
     case completed
-    /// 任务上传失败
     case failed
-    /// 任务已被取消
     case cancelled
 }
 
 // MARK: - 批量/全部上传的整体状态
-/// 批量或全部上传任务的整体状态枚举。
-///
-/// 用于表示一组上传任务的聚合状态，方便UI层进行整体展示和控制。
 public enum UploadBatchState: String {
-    /// 没有上传任务，或者所有任务都处于非活动状态。
     case idle
-    /// 所有未完成的任务都在上传中
     case uploading
-    /// 所有未完成的任务都处于暂停状态
     case paused
-    /// 所有未取消的任务都已成功完成
     case completed
 }
 
-// MARK: - 上传数据源类型
-/// 上传数据的来源类型定义
-public enum UploadSource: Equatable {
-    /// 本地文件URL
-    case file(url: URL)
-    /// 二进制数据（可选文件名，MIME类型）
-    case data(data: Data, filename: String, mimeType: String?)
+// MARK: - 上传文件来源（支持本地URL或二进制数据）
+public enum UploadFileSource {
+    case fileURL(URL)
+    case fileData(Data)
 }
 
-// MARK: - 上传任务信息
-/// 上传任务的公开信息结构体。
-///
-/// 提供上传任务的关键信息，供UI层展示和外部模块查询任务状态与详情。
-/// 实现了 `Identifiable` 协议，方便在SwiftUI等框架中使用。
+// MARK: - 单个上传文件项
+/// 上传文件项，支持URL或Data
+public struct UploadFileItem {
+    /// 文件来源（本地URL或二进制Data）
+    public let source: UploadFileSource
+    /// 表单字段名
+    public let formFieldName: String
+    /// 文件名（Data类型必填，URL类型默认用lastPathComponent）
+    public let fileName: String?
+    /// MIME类型（可选，推荐Data类型指定）
+    public let mimeType: String?
+
+    /// 以本地文件URL初始化
+    public init(fileURL: URL, formFieldName: String = "file", fileName: String? = nil, mimeType: String? = nil) {
+        self.source = .fileURL(fileURL)
+        self.formFieldName = formFieldName
+        self.fileName = fileName
+        self.mimeType = mimeType
+    }
+    /// 以二进制Data初始化
+    public init(data: Data, formFieldName: String = "file", fileName: String, mimeType: String? = nil) {
+        self.source = .fileData(data)
+        self.formFieldName = formFieldName
+        self.fileName = fileName
+        self.mimeType = mimeType
+    }
+}
+
+// MARK: - 上传任务信息（多文件支持）
 public struct UploadTaskInfo: Identifiable, Equatable {
     public static func == (lhs: UploadTaskInfo, rhs: UploadTaskInfo) -> Bool {
         lhs.id == rhs.id
     }
-    /// 任务的唯一标识符。
     public let id: UUID
-    /// 上传源（本地文件/二进制数据）
-    public let source: UploadSource
-    /// 上传目标接口URL。
+    public let files: [UploadFileItem]
     public let uploadURL: URL
-    /// 表单字段名。
-    public let formFieldName: String
-    /// 附加参数（表单键值对，可选）
-    public let parameters: [String: Any]?
-    /// 当前上传进度，范围从0.0到1.0。
     public var progress: Double
-    /// 当前任务的状态。
     public var state: UploadState
-    /// 关联的Alamofire请求对象。
     public var response: DataRequest?
-    /// 关联的CryoResult对象。
     public var cryoResult: CryoResult?
 }
 
 // MARK: - 上传管理器事件委托
-/// 上传事件回调协议
-///
-/// 实现该协议可自动感知上传任务及批量状态变更，推荐仅实现新API。
-///
-/// ### 使用示例
-/// ```swift
-/// class MyUploadVM: ObservableObject, UploadManagerDelegate {
-///     @Published var tasks: [UploadTaskInfo] = []
-///     @Published var completed: [UploadTaskInfo] = []
-///     @Published var progress: Double = 0
-///     @Published var state: UploadBatchState = .paused
-///     func uploadDidUpdate(task: UploadTaskInfo) { /* 单任务变化 */ }
-///     func uploadManagerDidUpdateActiveTasks(_ tasks: [UploadTaskInfo]) { self.tasks = tasks }
-///     func uploadManagerDidUpdateCompletedTasks(_ tasks: [UploadTaskInfo]) { self.completed = tasks }
-///     func uploadManagerDidUpdateProgress(overallProgress: Double, batchState: UploadBatchState) {
-///         self.progress = overallProgress
-///         self.state = batchState
-///     }
-/// }
-/// ```
-///
-/// - SeeAlso: ``UploadTaskInfo``
 public protocol UploadManagerDelegate: AnyObject {
-    /// 单任务变化回调（状态或进度等）
-    ///
-    /// - Parameter task: 最新任务信息
     func uploadDidUpdate(task: UploadTaskInfo)
-    /// 所有未完成任务变化时回调
-    ///
-    /// - Parameter tasks: 当前所有未完成任务
     func uploadManagerDidUpdateActiveTasks(_ tasks: [UploadTaskInfo])
-    /// 已完成任务变化时回调
-    ///
-    /// - Parameter tasks: 当前所有已完成任务
     func uploadManagerDidUpdateCompletedTasks(_ tasks: [UploadTaskInfo])
-    /// 整体进度或批量状态变化时回调
-    ///
-    /// - Parameters:
-    ///   - overallProgress: 总体进度(0.0-1.0)
-    ///   - batchState: 批量上传状态
     func uploadManagerDidUpdateProgress(overallProgress: Double, batchState: UploadBatchState)
 }
 public extension UploadManagerDelegate {
@@ -126,47 +84,19 @@ public extension UploadManagerDelegate {
 // MARK: - 内部上传任务结构体
 private struct UploadTask {
     let id: UUID
-    let source: UploadSource
+    let files: [UploadFileItem]
     let uploadURL: URL
-    let formFieldName: String
-    let parameters: [String: Any]?
     var progress: Double
     var state: UploadState
     var response: DataRequest?
     var cryoResult: CryoResult?
 }
 
-// MARK: - 上传管理器
-/// 支持批量/单个上传、并发控制、进度与状态自动推送的上传管理器。
-///
-/// 支持本地文件或二进制数据上传，支持baseURL和相对路径，支持多表单字段参数，线程安全，基于actor实现。
-///
-/// ### 使用示例
-/// ```swift
-/// let manager = UploadManager(baseURL: URL(string: "https://api.example.com"))
-/// // 上传本地文件并附带参数
-/// let id = manager.addTask(
-///     source: .file(url: fileURL),
-///     uploadPathOrURL: "/upload/image",
-///     parameters: [ "userId": 123, "desc": "图像" ]
-/// )
-/// // 上传二进制
-/// let id2 = manager.addTask(
-///     source: .data(data: data, filename: "demo.jpg", mimeType: "image/jpeg"),
-///     uploadPathOrURL: "/upload/image",
-///     parameters: [ "userId": 456 ]
-/// )
-/// await manager.startTask(id: id)
-/// await manager.startTask(id: id2)
-/// ```
-///
-/// - Note: 推荐仅在主UI层持有UploadManager实例，避免多实例竞争同一文件。
-/// - SeeAlso: ``UploadManagerDelegate``, ``UploadTaskInfo``, ``UploadSource``
+// MARK: - 上传管理器（带baseURL拼接支持）
 public actor UploadManager {
-    /// 队列唯一标识
+    /// 公共API基础URL；如果传入路径为相对路径，则自动拼接baseURL
+    public let baseURL: URL?
     public let identifier: String
-    /// 上传基础URL。支持传相对路径给上传任务。
-    private let baseURL: URL?
     private var tasks: [UUID: UploadTask] = [:]
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
     private var maxConcurrentUploads: Int
@@ -179,89 +109,53 @@ public actor UploadManager {
 
     // MARK: - 初始化
     /// 创建上传管理器
-    ///
     /// - Parameters:
+    ///   - baseURL: 基础URL；上传任务路径为相对路径时自动拼接
     ///   - identifier: 队列唯一ID，默认自动生成
-    ///   - baseURL: 上传基础URL（可选），如传入则addTask可用相对路径
     ///   - maxConcurrentUploads: 最大并发数，默认3
     ///   - headers: 全局请求头
     ///   - interceptor: 自定义请求拦截器
-    ///
-    /// ### 使用示例
-    /// ```
-    /// let manager = UploadManager(baseURL: URL(string: "https://api.example.com"))
-    /// ```
     public init(
-        identifier: String = UUID().uuidString,
         baseURL: URL? = nil,
+        identifier: String = UUID().uuidString,
         maxConcurrentUploads: Int = 3,
         headers: HTTPHeaders? = nil,
         interceptor: RequestInterceptor? = nil
     ) {
-        self.identifier = identifier
         self.baseURL = baseURL
+        self.identifier = identifier
         self.maxConcurrentUploads = maxConcurrentUploads
         self.headers = headers
         self.interceptor = interceptor
     }
 
-    // MARK: - URL拼接辅助
-    /// 内部：将字符串路径或URL转为绝对URL
-    ///
-    /// - Parameter pathOrURL: 路径或完整URL
-    /// - Returns: 绝对URL
-    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
-        if let url = URL(string: pathOrURL), url.scheme != nil {
-            // 已是完整URL
-            return url
-        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
-            return url.absoluteURL
-        } else {
-            return nil
-        }
-    }
-
     // MARK: - 事件委托注册
-    /// 添加事件委托
-    ///
-    /// - Parameter delegate: 订阅者
     public func addDelegate(_ delegate: UploadManagerDelegate) {
         delegates.add(delegate)
     }
-    /// 移除事件委托
-    ///
-    /// - Parameter delegate: 订阅者
     public func removeDelegate(_ delegate: UploadManagerDelegate) {
         delegates.remove(delegate)
     }
 
     // MARK: - 任务注册与调度
-    /// 注册单个上传任务（初始idle，不自动上传）
-    ///
+
+    /// 注册单个上传任务（支持多文件，初始idle，不自动上传）
     /// - Parameters:
-    ///   - source: 上传数据源（本地文件或二进制数据）
-    ///   - uploadPathOrURL: 上传接口的相对路径或完整URL
-    ///   - formFieldName: 表单字段名，默认"file"
-    ///   - parameters: 附加参数（如表单键值对），可选
+    ///   - files: 上传文件数组
+    ///   - uploadPathOrUrl: 上传接口路径，可以是相对路径或完整URL字符串
     /// - Returns: 任务ID
-    ///
-    /// - Note: 只注册任务，不自动开始上传。附加参数会以普通表单字段方式随文件一起上传。
     public func addTask(
-        source: UploadSource,
-        uploadPathOrURL: String,
-        formFieldName: String = "file",
-        parameters: [String: Any]? = nil
+        files: [UploadFileItem],
+        uploadPathOrUrl: String
     ) -> UUID {
-        guard let uploadURL = makeAbsoluteURL(from: uploadPathOrURL) else {
-            fatalError("Invalid upload url: \(uploadPathOrURL)")
+        guard let uploadURL = fullUploadURL(for: uploadPathOrUrl) else {
+            fatalError("上传路径无效：\(uploadPathOrUrl)")
         }
         let id = UUID()
         let task = UploadTask(
             id: id,
-            source: source,
+            files: files,
             uploadURL: uploadURL,
-            formFieldName: formFieldName,
-            parameters: parameters,
             progress: 0,
             state: .idle,
             response: nil,
@@ -273,74 +167,47 @@ public actor UploadManager {
         return id
     }
 
-    /// 批量注册任务（初始idle）
-    ///
-    /// - Parameters:
-    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName, parameters）
-    /// - Returns: 任务ID数组
+    /// 批量注册任务
     public func addTasks(
-        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String, parameters: [String: Any]?)]
+        fileGroups: [(files: [UploadFileItem], uploadPathOrUrl: String)]
     ) -> [UUID] {
         var ids: [UUID] = []
-        for info in files {
-            let id = addTask(source: info.source, uploadPathOrURL: info.uploadPathOrURL, formFieldName: info.formFieldName, parameters: info.parameters)
+        for group in fileGroups {
+            let id = addTask(files: group.files, uploadPathOrUrl: group.uploadPathOrUrl)
             ids.append(id)
         }
         return ids
     }
 
-    /// 启动单任务（注册并立即上传）
-    ///
-    /// - Parameters:
-    ///   - source: 上传数据源（本地文件或二进制数据）
-    ///   - uploadPathOrURL: 上传接口的相对路径或完整URL
-    ///   - formFieldName: 表单字段名，默认"file"
-    ///   - parameters: 附加参数（如表单键值对），可选
-    /// - Returns: 任务ID
+    /// 注册并立即上传单任务
     public func startUpload(
-        source: UploadSource,
-        uploadPathOrURL: String,
-        formFieldName: String = "file",
-        parameters: [String: Any]? = nil
+        files: [UploadFileItem],
+        uploadPathOrUrl: String
     ) async -> UUID {
-        let id = addTask(source: source, uploadPathOrURL: uploadPathOrURL, formFieldName: formFieldName, parameters: parameters)
+        let id = addTask(files: files, uploadPathOrUrl: uploadPathOrUrl)
         enqueueOrStartTask(id: id)
         updateBatchStateIfNeeded()
         return id
     }
 
-    /// 批量上传（注册并立即上传）
-    ///
-    /// - Parameters:
-    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName, parameters）
-    /// - Returns: 任务ID数组
+    /// 批量上传
     public func batchUpload(
-        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String, parameters: [String: Any]?)]
+        fileGroups: [(files: [UploadFileItem], uploadPathOrUrl: String)]
     ) async -> [UUID] {
         var ids: [UUID] = []
-        for info in files {
-            let id = await startUpload(
-                source: info.source,
-                uploadPathOrURL: info.uploadPathOrURL,
-                formFieldName: info.formFieldName,
-                parameters: info.parameters
-            )
+        for group in fileGroups {
+            let id = await startUpload(files: group.files, uploadPathOrUrl: group.uploadPathOrUrl)
             ids.append(id)
         }
         return ids
     }
 
-    /// 启动所有任务（idle/paused）
     public func startAllTasks() {
         self.batchStart(ids: allTaskIDs())
     }
-    /// 暂停所有任务
     public func stopAllTasks() {
         self.batchPause(ids: allTaskIDs())
     }
-    /// 批量启动
-    ///
-    /// - Parameter ids: 任务ID数组
     public func batchStart(ids: [UUID]) {
         for id in ids {
             if let task = tasks[id], task.state == .idle || task.state == .paused {
@@ -351,56 +218,33 @@ public actor UploadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 批量恢复（等价于启动）
-    ///
-    /// - Parameter ids: 任务ID数组
     public func batchResume(ids: [UUID]) {
         batchStart(ids: ids)
     }
-    /// 批量暂停
-    ///
-    /// - Parameter ids: 任务ID数组
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 批量取消
-    ///
-    /// - Parameter ids: 任务ID数组
     public func batchCancel(ids: [UUID]) {
         for id in ids { cancelTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 设置最大并发数
-    ///
-    /// - Parameter count: 新的并发数，最小1
-    ///
-    /// ### 使用示例
-    /// ```
-    /// manager.setMaxConcurrentUploads(5)
-    /// ```
     public func setMaxConcurrentUploads(_ count: Int) {
         self.maxConcurrentUploads = max(1, count)
         Task { self.checkAndStartNext() }
     }
 
     // MARK: - 单任务控制
-    /// 启动单任务
-    ///
-    /// - Parameter id: 任务ID
     public func startTask(id: UUID) {
         enqueueOrStartTask(id: id)
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-    /// 暂停单任务
-    ///
-    /// - Parameter id: 任务ID
     public func pauseTask(id: UUID) {
         guard var task = tasks[id] else { return }
         guard task.state == .uploading else {
@@ -420,9 +264,6 @@ public actor UploadManager {
         notifyProgressAndBatchState()
         Task { self.checkAndStartNext() }
     }
-    /// 恢复单任务
-    ///
-    /// - Parameter id: 任务ID
     public func resumeTask(id: UUID) {
         guard let task = tasks[id] else {return}
         if task.state == .paused || task.state == .idle || task.state == .failed {
@@ -432,9 +273,6 @@ public actor UploadManager {
             updateBatchStateIfNeeded()
         }
     }
-    /// 取消单任务
-    ///
-    /// - Parameter id: 任务ID
     public func cancelTask(id: UUID) {
         guard var task = tasks[id] else { return }
         if let idx = pendingQueue.firstIndex(of: id) {
@@ -459,9 +297,6 @@ public actor UploadManager {
         updateBatchStateIfNeeded()
         notifySingleTaskUpdate(task: task)
     }
-    /// 移除任务
-    ///
-    /// - Parameter id: 任务ID
     public func removeTask(id: UUID) {
         if let task = tasks[id], task.state == .uploading || pendingQueue.contains(id) {
             cancelTask(id: id)
@@ -475,10 +310,27 @@ public actor UploadManager {
         updateBatchStateIfNeeded()
     }
 
+    // MARK: - 路径拼接
+    /// 根据传入路径字符串，自动拼接baseURL或直接用绝对URL
+    private func fullUploadURL(for pathOrURL: String) -> URL? {
+        // 若为完整URL则直接用，否则拼接baseURL
+        if let url = URL(string: pathOrURL), url.scheme != nil {
+            return url
+        } else if let baseURL = baseURL {
+            // 支持 "/xxx" 或 "xxx" 形式
+            if pathOrURL.hasPrefix("/") {
+                // /xxx 直接 path 拼接
+                return baseURL.appendingPathComponent(String(pathOrURL.dropFirst()))
+            } else {
+                // 直接拼接
+                return baseURL.appendingPathComponent(pathOrURL)
+            }
+        } else {
+            return nil
+        }
+    }
+
     // MARK: - 私有：任务调度与上传
-    /// 尝试立即启动任务，否则排队
-    ///
-    /// - Parameter id: 任务ID
     private func enqueueOrStartTask(id: UUID) {
         guard var task = tasks[id] else { return }
         guard task.state == .idle || task.state == .paused else { return }
@@ -492,9 +344,8 @@ public actor UploadManager {
             tasks[id] = task
         }
     }
-    /// 内部上传启动
-    ///
-    /// - Parameter id: 任务ID
+
+    /// 内部上传启动，支持本地文件URL和二进制Data
     private func startTaskInternal(id: UUID) {
         guard var currentTask = tasks[id] else { return }
         guard currentTask.state == .idle || currentTask.state == .paused else { return }
@@ -503,71 +354,48 @@ public actor UploadManager {
 
         currentUploadingCount += 1
 
-        let request: DataRequest
-        let params = currentTask.parameters ?? [:]
-        switch currentTask.source {
-        case .file(let url):
-            request = AF.upload(
-                multipartFormData: { multipart in
-                    multipart.append(url, withName: currentTask.formFieldName)
-                    Self.appendParameters(multipart: multipart, parameters: params)
-                },
-                to: currentTask.uploadURL,
-                headers: headers,
-                interceptor: interceptor
-            )
-        case .data(let data, let filename, let mimeType):
-            request = AF.upload(
-                multipartFormData: { multipart in
-                    multipart.append(data, withName: currentTask.formFieldName, fileName: filename, mimeType: mimeType)
-                    Self.appendParameters(multipart: multipart, parameters: params)
-                },
-                to: currentTask.uploadURL,
-                headers: headers,
-                interceptor: interceptor
-            )
-        }
-
-        request
+        let request = AF.upload(
+            multipartFormData: { [self] multipart in
+                for item in currentTask.files {
+                    switch item.source {
+                    case .fileURL(let url):
+                        let fileName = item.fileName ?? url.lastPathComponent
+                        let mimeType = item.mimeType ?? mimeTypeForURL(url)
+                        multipart.append(url, withName: item.formFieldName, fileName: fileName, mimeType: mimeType)
+                    case .fileData(let data):
+                        // fileName和mimeType必须指定
+                        let fileName = item.fileName ?? UUID().uuidString
+                        let mimeType = item.mimeType ?? "application/octet-stream"
+                        multipart.append(data, withName: item.formFieldName, fileName: fileName, mimeType: mimeType)
+                    }
+                }
+            },
+            to: currentTask.uploadURL,
+            headers: headers,
+            interceptor: interceptor
+        )
         .uploadProgress { [weak self] progress in
             Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
         }
         .response { [weak self] response in
             Task { await self?.onComplete(id: id, response: response) }
         }
-
         currentTask.cryoResult = nil
         currentTask.response = request
         tasks[id] = currentTask
     }
 
-    /// 附加参数转换，支持Int/Float/Bool/String等常用类型
-    private static func appendParameters(multipart: MultipartFormData, parameters: [String: Any]) {
-        for (key, value) in parameters {
-            if let data = Self.anyToData(value) {
-                multipart.append(data, withName: key)
+    private func checkAndStartNext() {
+        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
+            let nextId = pendingQueue.removeFirst()
+            if let task = tasks[nextId], task.state == .idle {
+                startTaskInternal(id: nextId)
             }
         }
-    }
-    /// 任意类型转Data
-    private static func anyToData(_ value: Any) -> Data? {
-        switch value {
-        case let v as Data: return v
-        case let v as String: return v.data(using: .utf8)
-        case let v as Int: return String(v).data(using: .utf8)
-        case let v as Double: return String(v).data(using: .utf8)
-        case let v as Float: return String(v).data(using: .utf8)
-        case let v as Bool: return (v ? "true" : "false").data(using: .utf8)
-        default: return nil
-        }
+        notifyProgressAndBatchState()
     }
 
     // MARK: - 上传事件处理
-    /// 上传进度回调
-    ///
-    /// - Parameters:
-    ///   - id: 任务ID
-    ///   - progress: 当前进度（0.0~1.0）
     private func onProgress(id: UUID, progress: Double) {
         guard var currentTask = tasks[id] else { return }
         currentTask.progress = progress
@@ -578,11 +406,6 @@ public actor UploadManager {
             notifySingleTaskUpdate(task: currentTask)
         }
     }
-    /// 上传完成回调
-    ///
-    /// - Parameters:
-    ///   - id: 任务ID
-    ///   - response: 上传响应
     private func onComplete(id: UUID, response: AFDataResponse<Data?>) async {
         guard var currentTask = tasks[id] else { return }
         currentUploadingCount = max(0, currentUploadingCount - 1)
@@ -602,16 +425,11 @@ public actor UploadManager {
     }
 
     // MARK: - 事件派发
-    /// 推送单任务变化事件
-    ///
-    /// - Parameter task: 内部任务结构体
     private func notifySingleTaskUpdate(task: UploadTask) {
         let info = UploadTaskInfo(
             id: task.id,
-            source: task.source,
+            files: task.files,
             uploadURL: task.uploadURL,
-            formFieldName: task.formFieldName,
-            parameters: task.parameters,
             progress: task.progress,
             state: task.state,
             response: task.response,
@@ -623,7 +441,6 @@ public actor UploadManager {
             }
         }
     }
-    /// 推送未完成和已完成任务列表
     private func notifyTaskListUpdate() {
         let all = allTaskInfos()
         let active = all.filter { $0.state != .completed && $0.state != .cancelled }
@@ -635,7 +452,6 @@ public actor UploadManager {
             }
         }
     }
-    /// 推送整体进度和批量状态
     private func notifyProgressAndBatchState() {
         let progress = calcOverallProgress()
         let batch = calcBatchState()
@@ -650,7 +466,6 @@ public actor UploadManager {
             overallCompletedCalled = false
         }
     }
-    /// 检查并推送批量状态
     private func updateBatchStateIfNeeded() {
         let newState = calcBatchState()
         if newState != lastBatchState {
@@ -660,17 +475,12 @@ public actor UploadManager {
     }
 
     // MARK: - 状态/查询接口
-    /// 获取所有任务信息
-    ///
-    /// - Returns: 所有任务的 UploadTaskInfo 数组
     public func allTaskInfos() -> [UploadTaskInfo] {
         return tasks.values.map {
             UploadTaskInfo(
                 id: $0.id,
-                source: $0.source,
+                files: $0.files,
                 uploadURL: $0.uploadURL,
-                formFieldName: $0.formFieldName,
-                parameters: $0.parameters,
                 progress: $0.progress,
                 state: $0.state,
                 response: $0.response,
@@ -678,24 +488,15 @@ public actor UploadManager {
             )
         }
     }
-    /// 获取所有任务ID
-    ///
-    /// - Returns: 所有任务ID数组
     public func allTaskIDs() -> [UUID] {
         return Array(tasks.keys)
     }
-    /// 获取单个任务信息
-    ///
-    /// - Parameter id: 任务ID
-    /// - Returns: 任务信息 UploadTaskInfo 或 nil
     public func getTaskInfo(id: UUID) -> UploadTaskInfo? {
         guard let task = tasks[id] else { return nil }
         return UploadTaskInfo(
             id: task.id,
-            source: task.source,
+            files: task.files,
             uploadURL: task.uploadURL,
-            formFieldName: task.formFieldName,
-            parameters: task.parameters,
             progress: task.progress,
             state: task.state,
             response: task.response,
@@ -704,25 +505,16 @@ public actor UploadManager {
     }
 
     // MARK: - 进度/批量状态计算
-    /// 计算所有未取消任务的平均进度
-    ///
-    /// - Returns: 平均进度
     private func calcOverallProgress() -> Double {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         guard !validTasks.isEmpty else { return 1.0 }
         let sum = validTasks.map { min($0.progress, 1.0) }.reduce(0, +)
         return sum / Double(validTasks.count)
     }
-    /// 检查所有未取消任务是否全部完成
-    ///
-    /// - Returns: 是否全部完成
     private func isOverallCompleted() -> Bool {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
     }
-    /// 计算批量状态
-    ///
-    /// - Returns: 批量上传状态
     private func calcBatchState() -> UploadBatchState {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         if validTasks.isEmpty { return .idle }
@@ -738,14 +530,144 @@ public actor UploadManager {
         return .idle
     }
 
-    /// 检查等待队列，尝试启动下一个任务
-    private func checkAndStartNext() {
-        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
-            let nextId = pendingQueue.removeFirst()
-            if let task = tasks[nextId], task.state == .idle {
-                startTaskInternal(id: nextId)
-            }
+    // MARK: - MIME类型推断
+    /// 推断本地文件的MIME类型（按类别分组，支持常见格式）
+    private func mimeTypeForURL(_ url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        // MARK: 图片
+        switch ext {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "bmp": return "image/bmp"
+        case "webp": return "image/webp"
+        case "heic": return "image/heic"
+        case "tiff", "tif": return "image/tiff"
+        case "ico": return "image/x-icon"
+        case "svg": return "image/svg+xml"
+        case "psd": return "image/vnd.adobe.photoshop"
+        case "ai": return "application/postscript"
+
+        // MARK: 音频
+        case "mp3": return "audio/mpeg"
+        case "wav": return "audio/wav"
+        case "ogg": return "audio/ogg"
+        case "aac": return "audio/aac"
+        case "flac": return "audio/flac"
+        case "m4a": return "audio/mp4"
+        case "amr": return "audio/amr"
+        case "wma": return "audio/x-ms-wma"
+        case "aiff", "aif": return "audio/aiff"
+        case "opus": return "audio/opus"
+
+        // MARK: 视频
+        case "mp4": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "avi": return "video/x-msvideo"
+        case "wmv": return "video/x-ms-wmv"
+        case "mkv": return "video/x-matroska"
+        case "flv": return "video/x-flv"
+        case "webm": return "video/webm"
+        case "3gp": return "video/3gpp"
+        case "3g2": return "video/3gpp2"
+        case "f4v": return "video/x-f4v"
+        case "m4v": return "video/x-m4v"
+        case "mts": return "video/MP2T"
+        case "ts": return "video/MP2T"
+        case "m2ts": return "video/MP2T"
+
+        // MARK: 文档
+        case "pdf": return "application/pdf"
+        case "doc": return "application/msword"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "xls": return "application/vnd.ms-excel"
+        case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "ppt": return "application/vnd.ms-powerpoint"
+        case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case "txt": return "text/plain"
+        case "rtf": return "application/rtf"
+        case "csv": return "text/csv"
+        case "md": return "text/markdown"
+        case "json": return "application/json"
+        case "xml": return "application/xml"
+        case "yaml", "yml": return "application/x-yaml"
+        case "html", "htm": return "text/html"
+        case "xps": return "application/oxps"
+        case "odt": return "application/vnd.oasis.opendocument.text"
+        case "ods": return "application/vnd.oasis.opendocument.spreadsheet"
+        case "odp": return "application/vnd.oasis.opendocument.presentation"
+
+        // MARK: 压缩包
+        case "zip": return "application/zip"
+        case "rar": return "application/vnd.rar"
+        case "7z": return "application/x-7z-compressed"
+        case "tar": return "application/x-tar"
+        case "gz": return "application/gzip"
+        case "bz2": return "application/x-bzip2"
+        case "xz": return "application/x-xz"
+        case "lz": return "application/x-lzip"
+        case "lzma": return "application/x-lzma"
+        case "z": return "application/x-compress"
+        case "cab": return "application/vnd.ms-cab-compressed"
+        case "arj": return "application/x-arj"
+
+        // MARK: 代码文件/脚本
+        case "js": return "application/javascript"
+        case "mjs": return "application/javascript"
+        case "ts": return "application/typescript"
+        case "css": return "text/css"
+        case "swift": return "text/x-swift"
+        case "java": return "text/x-java-source"
+        case "c": return "text/x-c"
+        case "cpp", "cxx": return "text/x-c++src"
+        case "h": return "text/x-chdr"
+        case "hpp": return "text/x-c++hdr"
+        case "m": return "text/x-objective-c"
+        case "py": return "text/x-python"
+        case "rb": return "text/x-ruby"
+        case "go": return "text/x-go"
+        case "sh": return "application/x-sh"
+        case "php": return "application/x-httpd-php"
+        case "pl": return "text/x-perl"
+        case "scala": return "text/x-scala"
+        case "kt", "kts": return "text/x-kotlin"
+        case "dart": return "text/x-dart"
+        case "rs": return "text/x-rustsrc"
+        case "vue": return "text/x-vue"
+        case "sql": return "application/sql"
+        case "bat": return "application/x-bat"
+
+        // MARK: 电子书
+        case "epub": return "application/epub+zip"
+        case "mobi": return "application/x-mobipocket-ebook"
+        case "azw", "azw3": return "application/vnd.amazon.ebook"
+        case "fb2": return "application/x-fictionbook+xml"
+
+        // MARK: 字体
+        case "ttf": return "font/ttf"
+        case "otf": return "font/otf"
+        case "woff": return "font/woff"
+        case "woff2": return "font/woff2"
+        case "eot": return "application/vnd.ms-fontobject"
+
+        // MARK: 其它
+        case "apk": return "application/vnd.android.package-archive"
+        case "ipa": return "application/octet-stream"
+        case "exe": return "application/vnd.microsoft.portable-executable"
+        case "dmg": return "application/x-apple-diskimage"
+        case "iso": return "application/x-iso9660-image"
+        case "sketch": return "application/octet-stream"
+        case "ps": return "application/postscript"
+        case "ics": return "text/calendar"
+        case "torrent": return "application/x-bittorrent"
+        case "swf": return "application/x-shockwave-flash"
+        case "crx": return "application/x-chrome-extension"
+        case "vcf": return "text/vcard"
+        case "eml": return "message/rfc822"
+        case "msg": return "application/vnd.ms-outlook"
+        case "otf": return "font/otf"
+        case "ics": return "text/calendar"
+        default: return "application/octet-stream"
         }
-        notifyProgressAndBatchState()
     }
 }
