@@ -179,7 +179,7 @@ public actor UploadManager {
     private let globalParameters: [String: Any]?
     /// 全局HTTP请求头
     private let headers: HTTPHeaders?
-    
+    private let baseURL: URL?
     private var tasks: [UUID: UploadTask] = [:]
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
     private var currentUploadingCount: Int = 0
@@ -198,6 +198,7 @@ public actor UploadManager {
     /// 内部上传任务结构体
     private struct UploadTask {
         let id: UUID
+        let baseURL: URL? = nil
         let files: [UploadFileItem]
         let uploadURL: URL
         let parameters: [String: Any]?
@@ -287,6 +288,22 @@ public actor UploadManager {
         self.globalParameters = globalParameters
         self.interceptor = interceptor
         self.tokenManager = tokenManager
+        self.baseURL = baseURL
+    }
+    
+    // MARK: - URL拼接辅助
+    /// 将相对路径或完整URL转换为绝对URL
+    ///
+    /// - Parameter pathOrURL: 路径或完整URL
+    /// - Returns: 绝对URL
+    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
+        if let url = URL(string: pathOrURL), url.scheme != nil {
+            return url
+        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
+            return url.absoluteURL
+        } else {
+            return nil
+        }
     }
     
     // MARK: - 委托注册与移除
@@ -314,14 +331,17 @@ public actor UploadManager {
     /// ```
     public func addTask(
         files: [UploadFileItem],
-        uploadURL: URL,
+        pathOrURL: String,
         parameters: [String: Any]? = nil
     ) -> UUID {
+        guard let url = makeAbsoluteURL(from: pathOrURL) else {
+            fatalError("Invalid download url: \(pathOrURL)")
+        }
         let id = UUID()
         let task = UploadTask(
             id: id,
             files: files,
-            uploadURL: uploadURL,
+            uploadURL: url,
             parameters: parameters,
             progress: 0,
             state: .idle,
@@ -347,11 +367,11 @@ public actor UploadManager {
     /// ])
     /// ```
     public func addTasks(
-        fileGroups: [(files: [UploadFileItem], uploadURL: URL, parameters: [String: Any]?)]
+        fileGroups: [(files: [UploadFileItem], pathsOrURLs: String, parameters: [String: Any]?)]
     ) -> [UUID] {
         var ids: [UUID] = []
         for group in fileGroups {
-            let id = addTask(files: group.files, uploadURL: group.uploadURL, parameters: group.parameters)
+            let id = addTask(files: group.files, pathOrURL: group.pathsOrURLs, parameters: group.parameters)
             ids.append(id)
         }
         return ids
@@ -366,10 +386,10 @@ public actor UploadManager {
     /// - Returns: 任务ID
     public func startUpload(
         files: [UploadFileItem],
-        uploadURL: URL,
+        pathsOrURLs: String,
         parameters: [String: Any]? = nil
     ) async -> UUID {
-        let id = addTask(files: files, uploadURL: uploadURL, parameters: parameters)
+        let id = addTask(files: files, pathOrURL: pathsOrURLs, parameters: parameters)
         enqueueOrStartTask(id: id)
         updateBatchStateIfNeeded()
         return id
@@ -380,11 +400,11 @@ public actor UploadManager {
     /// - Parameter fileGroups: 每个元素含[文件]、uploadURL、参数
     /// - Returns: 所有任务ID
     public func batchUpload(
-        fileGroups: [(files: [UploadFileItem], uploadURL: URL, parameters: [String: Any]?)]
+        fileGroups: [(files: [UploadFileItem], pathOrURL: String, parameters: [String: Any]?)]
     ) async -> [UUID] {
         var ids: [UUID] = []
         for group in fileGroups {
-            let id = await startUpload(files: group.files, uploadURL: group.uploadURL, parameters: group.parameters)
+            let id = await startUpload(files: group.files, pathsOrURLs: group.pathOrURL, parameters: group.parameters)
             ids.append(id)
         }
         return ids
