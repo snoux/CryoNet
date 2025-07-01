@@ -330,20 +330,17 @@ public actor UploadManager {
     /// let id = manager.addTask(files: [fileItem], uploadURL: url, parameters: ["bizId": "123"])
     /// ```
     public func addTask(
-        files: [UploadFileItem],
-        pathOrURL: String,
-        parameters: [String: Any]? = nil
+        filesGroup:UploadFileGroup
     ) -> UUID {
-        guard let url = makeAbsoluteURL(from: pathOrURL) else {
-            fatalError("Invalid download url: \(pathOrURL)")
+        guard let url = makeAbsoluteURL(from: filesGroup.uploadPathOrUrl) else {
+            fatalError("Invalid download url: \(filesGroup.uploadPathOrUrl)")
         }
-        print("\(pathOrURL) --- 注册请求地址 ---  \(url)")
         let id = UUID()
         let task = UploadTask(
             id: id,
-            files: files,
+            files: filesGroup.files,
             uploadURL: url,
-            parameters: parameters,
+            parameters: filesGroup.parameters,
             progress: 0,
             state: .idle,
             response: nil,
@@ -368,11 +365,11 @@ public actor UploadManager {
     /// ])
     /// ```
     public func addTasks(
-        fileGroups: [(files: [UploadFileItem], pathsOrURLs: String, parameters: [String: Any]?)]
+        fileGroups: [UploadFileGroup]
     ) -> [UUID] {
         var ids: [UUID] = []
         for group in fileGroups {
-            let id = addTask(files: group.files, pathOrURL: group.pathsOrURLs, parameters: group.parameters)
+            let id = addTask(filesGroup: group)
             ids.append(id)
         }
         return ids
@@ -386,11 +383,9 @@ public actor UploadManager {
     ///   - parameters: 附加参数
     /// - Returns: 任务ID
     public func startUpload(
-        files: [UploadFileItem],
-        pathsOrURLs: String,
-        parameters: [String: Any]? = nil
+        filesGroup:UploadFileGroup
     ) async -> UUID {
-        let id = addTask(files: files, pathOrURL: pathsOrURLs, parameters: parameters)
+        let id = addTask(filesGroup: filesGroup)
         enqueueOrStartTask(id: id)
         updateBatchStateIfNeeded()
         return id
@@ -401,11 +396,11 @@ public actor UploadManager {
     /// - Parameter fileGroups: 每个元素含[文件]、uploadURL、参数
     /// - Returns: 所有任务ID
     public func batchUpload(
-        fileGroups: [(files: [UploadFileItem], pathOrURL: String, parameters: [String: Any]?)]
+        fileGroups: [UploadFileGroup]
     ) async -> [UUID] {
         var ids: [UUID] = []
         for group in fileGroups {
-            let id = await startUpload(files: group.files, pathsOrURLs: group.pathOrURL, parameters: group.parameters)
+            let id = await startUpload(filesGroup: group)
             ids.append(id)
         }
         return ids
@@ -906,5 +901,17 @@ public actor UploadManager {
         case "msg": return "application/vnd.ms-outlook"
         default: return "application/octet-stream"
         }
+    }
+}
+
+
+public struct UploadFileGroup {
+    public let files: [UploadFileItem]
+    public let uploadPathOrUrl: String
+    public let parameters: [String: Any]?
+    public init(files: [UploadFileItem], uploadPathOrUrl: String, parameters: [String: Any]? = nil) {
+        self.files = files
+        self.uploadPathOrUrl = uploadPathOrUrl
+        self.parameters = parameters
     }
 }
