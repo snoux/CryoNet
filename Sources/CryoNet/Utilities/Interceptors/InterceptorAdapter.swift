@@ -436,9 +436,10 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     /// - Parameters:
     ///   - interceptor: 拦截器
     ///   - tokenManager: tokenManager
-    init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol) {
+    init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol? = nil) {
         self.interceptor = interceptor
-        self.tokenManager = tokenManager
+        self.tokenManager = tokenManager ?? DefaultTokenManager()
+
     }
     
     /// 请求适配，自动注入 token

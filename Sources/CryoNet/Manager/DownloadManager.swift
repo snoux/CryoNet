@@ -151,8 +151,8 @@ public actor DownloadManager {
     private var lastBatchState: DownloadBatchState = .idle
     private var overallCompletedCalled: Bool = false
     private let globalHeaders: HTTPHeaders?
-    private let interceptor: RequestInterceptor?
-    private let businessInterceptor: RequestInterceptorProtocol?
+    private let interceptor: RequestInterceptorProtocol?
+    private let tokenManager: TokenManagerProtocol?
 
     /// 创建下载管理器
     ///
@@ -162,24 +162,33 @@ public actor DownloadManager {
     ///   - maxConcurrentDownloads: 最大并发数，默认3
     ///   - headers: 全局请求头
     ///   - interceptor: 业务拦截器
+    ///   - tokenManager: Token 管理
     ///
     /// ### 使用示例
     /// ```
-    /// let manager = DownloadManager(baseURL: URL(string: "https://files.example.com"))
+    /// let manager = DownloadManager(
+    ///     baseURL: URL(string: "https://files.example.com")
+    /// )
     /// ```
+    ///
+    /// - Note:
+    ///   - ``RequestInterceptorProtocol`` 与 ``TokenManagerProtocol`` 需要搭配一起使用.
+    ///   - 当``RequestInterceptorProtocol``为请求注入token时,会默认从传入的``TokenManagerProtocol``进行读取
+    
     public init(
         identifier: String = UUID().uuidString,
         baseURL: URL? = nil,
         maxConcurrentDownloads: Int = 3,
         headers: HTTPHeaders? = nil,
-        interceptor: RequestInterceptorProtocol? = nil
+        interceptor: RequestInterceptorProtocol? = nil,
+        tokenManager: TokenManagerProtocol? = nil
     ) {
         self.identifier = identifier
         self.baseURL = baseURL
         self.maxConcurrentDownloads = maxConcurrentDownloads
         self.globalHeaders = headers
-        self.businessInterceptor = interceptor
-        self.interceptor = nil
+        self.interceptor = interceptor
+        self.tokenManager = tokenManager
     }
 
     // MARK: - URL拼接辅助
@@ -529,7 +538,10 @@ public actor DownloadManager {
             urlRequestConvertible,
             method: method,
             headers: mergedHeaders,
-            interceptor: interceptor,
+            interceptor: InterceptorAdapter(
+                interceptor: interceptor,
+                tokenManager: tokenManager
+            ),
             to: destination
         )
         .downloadProgress { [weak self] progress in
