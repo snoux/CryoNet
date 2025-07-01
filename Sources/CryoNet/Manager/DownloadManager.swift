@@ -154,6 +154,9 @@ public actor DownloadManager {
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol?
 
+    private var interceptorAdapter:RequestInterceptor{
+        InterceptorAdapter(interceptor: interceptor,tokenManager: tokenManager)
+    }
     /// 创建下载管理器
     ///
     /// - Parameters:
@@ -538,10 +541,7 @@ public actor DownloadManager {
             urlRequestConvertible,
             method: method,
             headers: mergedHeaders,
-            interceptor: InterceptorAdapter(
-                interceptor: interceptor,
-                tokenManager: tokenManager
-            ),
+            interceptor: interceptorAdapter,
             to: destination
         )
         .downloadProgress { [weak self] progress in

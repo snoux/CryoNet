@@ -18,6 +18,11 @@ public actor DownloadManagerPool {
         managers[identifier] = manager
         return manager
     }
+    
+    /// 获取指定 identifier 的 DownloadManager（不存在不创建，返回 nil）
+    public func getManager(for identifier: String) -> DownloadManager? {
+        managers[identifier]
+    }
 
     /// 获取所有已创建的 DownloadManager
     public func allManagers() -> [DownloadManager] {

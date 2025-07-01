@@ -117,7 +117,7 @@ open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
  默认实现，支持 token 注入、业务异常处理、结构化错误输出，支持响应结构配置定制。
  */
 open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, @unchecked Sendable {
-    private let responseConfig: ResponseStructureConfig
+    public let responseConfig: ResponseStructureConfig
     
     /// 初始化，支持自定义响应结构
     public init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
