@@ -61,6 +61,8 @@ public struct UploadTaskInfo: Identifiable, Equatable {
     public let uploadURL: URL
     /// 表单字段名。
     public let formFieldName: String
+    /// 附加参数（表单键值对，可选）
+    public let parameters: [String: Any]?
     /// 当前上传进度，范围从0.0到1.0。
     public var progress: Double
     /// 当前任务的状态。
@@ -127,6 +129,7 @@ private struct UploadTask {
     let source: UploadSource
     let uploadURL: URL
     let formFieldName: String
+    let parameters: [String: Any]?
     var progress: Double
     var state: UploadState
     var response: DataRequest?
@@ -136,15 +139,23 @@ private struct UploadTask {
 // MARK: - 上传管理器
 /// 支持批量/单个上传、并发控制、进度与状态自动推送的上传管理器。
 ///
-/// 支持本地文件或二进制数据上传，支持baseURL和相对路径，线程安全，基于actor实现。
+/// 支持本地文件或二进制数据上传，支持baseURL和相对路径，支持多表单字段参数，线程安全，基于actor实现。
 ///
 /// ### 使用示例
 /// ```swift
 /// let manager = UploadManager(baseURL: URL(string: "https://api.example.com"))
-/// // 上传本地文件
-/// let id = manager.addTask(source: .file(url: fileURL), uploadPathOrURL: "/upload/image")
+/// // 上传本地文件并附带参数
+/// let id = manager.addTask(
+///     source: .file(url: fileURL),
+///     uploadPathOrURL: "/upload/image",
+///     parameters: [ "userId": 123, "desc": "图像" ]
+/// )
 /// // 上传二进制
-/// let id2 = manager.addTask(source: .data(data: data, filename: "demo.jpg", mimeType: "image/jpeg"), uploadPathOrURL: "/upload/image")
+/// let id2 = manager.addTask(
+///     source: .data(data: data, filename: "demo.jpg", mimeType: "image/jpeg"),
+///     uploadPathOrURL: "/upload/image",
+///     parameters: [ "userId": 456 ]
+/// )
 /// await manager.startTask(id: id)
 /// await manager.startTask(id: id2)
 /// ```
@@ -231,13 +242,15 @@ public actor UploadManager {
     ///   - source: 上传数据源（本地文件或二进制数据）
     ///   - uploadPathOrURL: 上传接口的相对路径或完整URL
     ///   - formFieldName: 表单字段名，默认"file"
+    ///   - parameters: 附加参数（如表单键值对），可选
     /// - Returns: 任务ID
     ///
-    /// - Note: 只注册任务，不自动开始上传。
+    /// - Note: 只注册任务，不自动开始上传。附加参数会以普通表单字段方式随文件一起上传。
     public func addTask(
         source: UploadSource,
         uploadPathOrURL: String,
-        formFieldName: String = "file"
+        formFieldName: String = "file",
+        parameters: [String: Any]? = nil
     ) -> UUID {
         guard let uploadURL = makeAbsoluteURL(from: uploadPathOrURL) else {
             fatalError("Invalid upload url: \(uploadPathOrURL)")
@@ -248,6 +261,7 @@ public actor UploadManager {
             source: source,
             uploadURL: uploadURL,
             formFieldName: formFieldName,
+            parameters: parameters,
             progress: 0,
             state: .idle,
             response: nil,
@@ -262,14 +276,14 @@ public actor UploadManager {
     /// 批量注册任务（初始idle）
     ///
     /// - Parameters:
-    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName）
+    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName, parameters）
     /// - Returns: 任务ID数组
     public func addTasks(
-        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String)]
+        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String, parameters: [String: Any]?)]
     ) -> [UUID] {
         var ids: [UUID] = []
         for info in files {
-            let id = addTask(source: info.source, uploadPathOrURL: info.uploadPathOrURL, formFieldName: info.formFieldName)
+            let id = addTask(source: info.source, uploadPathOrURL: info.uploadPathOrURL, formFieldName: info.formFieldName, parameters: info.parameters)
             ids.append(id)
         }
         return ids
@@ -281,13 +295,15 @@ public actor UploadManager {
     ///   - source: 上传数据源（本地文件或二进制数据）
     ///   - uploadPathOrURL: 上传接口的相对路径或完整URL
     ///   - formFieldName: 表单字段名，默认"file"
+    ///   - parameters: 附加参数（如表单键值对），可选
     /// - Returns: 任务ID
     public func startUpload(
         source: UploadSource,
         uploadPathOrURL: String,
-        formFieldName: String = "file"
+        formFieldName: String = "file",
+        parameters: [String: Any]? = nil
     ) async -> UUID {
-        let id = addTask(source: source, uploadPathOrURL: uploadPathOrURL, formFieldName: formFieldName)
+        let id = addTask(source: source, uploadPathOrURL: uploadPathOrURL, formFieldName: formFieldName, parameters: parameters)
         enqueueOrStartTask(id: id)
         updateBatchStateIfNeeded()
         return id
@@ -296,14 +312,19 @@ public actor UploadManager {
     /// 批量上传（注册并立即上传）
     ///
     /// - Parameters:
-    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName）
+    ///   - files: 文件信息元组数组（source, uploadPathOrURL, formFieldName, parameters）
     /// - Returns: 任务ID数组
     public func batchUpload(
-        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String)]
+        files: [(source: UploadSource, uploadPathOrURL: String, formFieldName: String, parameters: [String: Any]?)]
     ) async -> [UUID] {
         var ids: [UUID] = []
         for info in files {
-            let id = await startUpload(source: info.source, uploadPathOrURL: info.uploadPathOrURL, formFieldName: info.formFieldName)
+            let id = await startUpload(
+                source: info.source,
+                uploadPathOrURL: info.uploadPathOrURL,
+                formFieldName: info.formFieldName,
+                parameters: info.parameters
+            )
             ids.append(id)
         }
         return ids
@@ -483,11 +504,13 @@ public actor UploadManager {
         currentUploadingCount += 1
 
         let request: DataRequest
+        let params = currentTask.parameters ?? [:]
         switch currentTask.source {
         case .file(let url):
             request = AF.upload(
                 multipartFormData: { multipart in
                     multipart.append(url, withName: currentTask.formFieldName)
+                    Self.appendParameters(multipart: multipart, parameters: params)
                 },
                 to: currentTask.uploadURL,
                 headers: headers,
@@ -497,6 +520,7 @@ public actor UploadManager {
             request = AF.upload(
                 multipartFormData: { multipart in
                     multipart.append(data, withName: currentTask.formFieldName, fileName: filename, mimeType: mimeType)
+                    Self.appendParameters(multipart: multipart, parameters: params)
                 },
                 to: currentTask.uploadURL,
                 headers: headers,
@@ -516,15 +540,26 @@ public actor UploadManager {
         currentTask.response = request
         tasks[id] = currentTask
     }
-    /// 检查等待队列，尝试启动下一个任务
-    private func checkAndStartNext() {
-        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
-            let nextId = pendingQueue.removeFirst()
-            if let task = tasks[nextId], task.state == .idle {
-                startTaskInternal(id: nextId)
+
+    /// 附加参数转换，支持Int/Float/Bool/String等常用类型
+    private static func appendParameters(multipart: MultipartFormData, parameters: [String: Any]) {
+        for (key, value) in parameters {
+            if let data = Self.anyToData(value) {
+                multipart.append(data, withName: key)
             }
         }
-        notifyProgressAndBatchState()
+    }
+    /// 任意类型转Data
+    private static func anyToData(_ value: Any) -> Data? {
+        switch value {
+        case let v as Data: return v
+        case let v as String: return v.data(using: .utf8)
+        case let v as Int: return String(v).data(using: .utf8)
+        case let v as Double: return String(v).data(using: .utf8)
+        case let v as Float: return String(v).data(using: .utf8)
+        case let v as Bool: return (v ? "true" : "false").data(using: .utf8)
+        default: return nil
+        }
     }
 
     // MARK: - 上传事件处理
@@ -576,6 +611,7 @@ public actor UploadManager {
             source: task.source,
             uploadURL: task.uploadURL,
             formFieldName: task.formFieldName,
+            parameters: task.parameters,
             progress: task.progress,
             state: task.state,
             response: task.response,
@@ -634,6 +670,7 @@ public actor UploadManager {
                 source: $0.source,
                 uploadURL: $0.uploadURL,
                 formFieldName: $0.formFieldName,
+                parameters: $0.parameters,
                 progress: $0.progress,
                 state: $0.state,
                 response: $0.response,
@@ -658,6 +695,7 @@ public actor UploadManager {
             source: task.source,
             uploadURL: task.uploadURL,
             formFieldName: task.formFieldName,
+            parameters: task.parameters,
             progress: task.progress,
             state: task.state,
             response: task.response,
@@ -698,5 +736,16 @@ public actor UploadManager {
         if idleCount > 0 && uploadingCount == 0 && pausedCount == 0 { return .idle }
         if pausedCount > 0 && uploadingCount == 0 { return .paused }
         return .idle
+    }
+
+    /// 检查等待队列，尝试启动下一个任务
+    private func checkAndStartNext() {
+        while currentUploadingCount < maxConcurrentUploads, !pendingQueue.isEmpty {
+            let nextId = pendingQueue.removeFirst()
+            if let task = tasks[nextId], task.state == .idle {
+                startTaskInternal(id: nextId)
+            }
+        }
+        notifyProgressAndBatchState()
     }
 }
