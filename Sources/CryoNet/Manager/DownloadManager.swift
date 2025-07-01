@@ -118,15 +118,18 @@ private struct DownloadTask {
 ///
 /// - Parameters:
 ///   - identifier: 队列唯一ID，默认自动生成
+///   - baseURL: 下载基础URL（可选），如传入则addTask和批量任务可用相对路径
 ///   - maxConcurrentDownloads: 最大并发数，默认3
 ///   - headers: 全局请求头
 ///   - interceptor: 业务拦截器
 ///
 /// ### 使用示例：
 /// ```swift
-/// let manager = DownloadManager()
+/// let manager = DownloadManager(baseURL: URL(string: "https://files.example.com"))
 /// await manager.addDelegate(self)
-/// let ids = await manager.addTasks(urls: [url1, url2])
+/// let id1 = manager.addTask(pathOrURL: "/video/1.mp4")
+/// let id2 = manager.addTask(pathOrURL: "https://cdn.example.com/video/2.mp4")
+/// let ids = await manager.batchAddTasks(pathsOrURLs: ["/a.png", "/b.png"])
 /// await manager.batchStart(ids: ids)
 /// ```
 ///
@@ -134,6 +137,8 @@ private struct DownloadTask {
 /// - SeeAlso: ``DownloadManagerDelegate``, ``DownloadTaskInfo``
 public actor DownloadManager {
     public let identifier: String
+    /// 下载基础URL。支持传相对路径给下载任务。
+    private let baseURL: URL?
     private var tasks: [UUID: DownloadTask] = [:]
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
     private var maxConcurrentDownloads: Int
@@ -144,34 +149,52 @@ public actor DownloadManager {
     private let headers: HTTPHeaders?
     private let interceptor: RequestInterceptor?
     private let businessInterceptor: RequestInterceptorProtocol?
-
+    
     /// 创建下载管理器
     ///
     /// - Parameters:
     ///   - identifier: 队列唯一ID，默认自动生成
+    ///   - baseURL: 下载基础URL（可选），如传入则addTask和批量任务可用相对路径
     ///   - maxConcurrentDownloads: 最大并发数，默认3
     ///   - headers: 全局请求头
     ///   - interceptor: 业务拦截器
     ///
     /// ### 使用示例
     /// ```
-    /// let manager = DownloadManager()
+    /// let manager = DownloadManager(baseURL: URL(string: "https://files.example.com"))
     /// ```
     public init(
         identifier: String = UUID().uuidString,
+        baseURL: URL? = nil,
         maxConcurrentDownloads: Int = 3,
         headers: HTTPHeaders? = nil,
         interceptor: RequestInterceptorProtocol? = nil
     ) {
         self.identifier = identifier
+        self.baseURL = baseURL
         self.maxConcurrentDownloads = maxConcurrentDownloads
         self.headers = headers
         self.businessInterceptor = interceptor
         self.interceptor = nil
     }
-
+    
+    // MARK: - URL拼接辅助
+    /// 将相对路径或完整URL转换为绝对URL
+    ///
+    /// - Parameter pathOrURL: 路径或完整URL
+    /// - Returns: 绝对URL
+    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
+        if let url = URL(string: pathOrURL), url.scheme != nil {
+            return url
+        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
+            return url.absoluteURL
+        } else {
+            return nil
+        }
+    }
+    
     // MARK: - 事件委托注册
-
+    
     /// 添加事件委托
     ///
     /// - Parameter delegate: 订阅者
@@ -183,34 +206,37 @@ public actor DownloadManager {
     public func addDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.add(delegate)
     }
-
+    
     /// 移除事件委托
     ///
     /// - Parameter delegate: 订阅者
     public func removeDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.remove(delegate)
     }
-
+    
     // MARK: - 任务注册与调度
-
-    /// 注册单个任务（初始idle）
+    
+    /// 注册单个任务（初始idle），支持相对路径或完整URL
     ///
     /// - Parameters:
-    ///   - url: 远程文件URL
+    ///   - pathOrURL: 下载资源的相对路径或完整URL
     ///   - destination: 保存路径(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID
     ///
     /// ### 使用示例
     /// ```
-    /// let id = manager.addTask(url: url)
+    /// let id = manager.addTask(pathOrURL: "/video/1.mp4")
+    /// let id2 = manager.addTask(pathOrURL: "https://cdn.example.com/video/2.mp4")
     /// ```
-    /// - Note: 只注册任务，不自动开始下载。
     public func addTask(
-        url: URL,
+        pathOrURL: String,
         destination: URL? = nil,
         saveToAlbum: Bool = false
     ) -> UUID {
+        guard let url = makeAbsoluteURL(from: pathOrURL) else {
+            fatalError("Invalid download url: \(pathOrURL)")
+        }
         let id = UUID()
         let destURL = destination ?? Self.defaultDownloadFolder().appendingPathComponent(url.lastPathComponent)
         let task = DownloadTask(
@@ -228,86 +254,80 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         return id
     }
-
-    /// 批量注册任务（初始idle）
+    
+    /// 批量注册任务（初始idle），支持相对路径或完整URL
     ///
     /// - Parameters:
-    ///   - urls: 文件URL数组
+    ///   - pathsOrURLs: 路径/URL字符串数组
     ///   - destinationFolder: 保存目录(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID数组
     ///
     /// ### 使用示例
     /// ```
-    /// let ids = manager.addTasks(urls: [url1, url2])
+    /// let ids = manager.batchAddTasks(pathsOrURLs: ["/a.png", "/b.png", "https://xx/1.mp4"])
     /// ```
-    public func addTasks(
-        urls: [URL],
+    public func batchAddTasks(
+        pathsOrURLs: [String],
         destinationFolder: URL? = nil,
         saveToAlbum: Bool = false
     ) -> [UUID] {
         var ids: [UUID] = []
-        for url in urls {
-            let dest = destinationFolder?.appendingPathComponent(url.lastPathComponent)
-            let id = addTask(url: url, destination: dest, saveToAlbum: saveToAlbum)
+        for pathOrURL in pathsOrURLs {
+            let id = addTask(pathOrURL: pathOrURL, destination: destinationFolder?.appendingPathComponent((URL(string: pathOrURL)?.lastPathComponent) ?? (pathOrURL as NSString).lastPathComponent), saveToAlbum: saveToAlbum)
             ids.append(id)
         }
         return ids
     }
-
-    /// 启动单任务（注册并立即下载）
+    
+    /// 启动单任务（注册并立即下载），支持相对路径或完整URL
     ///
     /// - Parameters:
-    ///   - url: 远程文件URL
+    ///   - pathOrURL: 下载资源的相对路径或完整URL
     ///   - destination: 保存路径(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID
     ///
     /// ### 使用示例
     /// ```
-    /// let id = await manager.startDownload(from: url)
+    /// let id = await manager.startDownload(pathOrURL: "/video/1.mp4")
     /// ```
     public func startDownload(
-        from url: URL,
-        to destination: URL? = nil,
+        pathOrURL: String,
+        destination: URL? = nil,
         saveToAlbum: Bool = false
     ) async -> UUID {
-        let id = addTask(url: url, destination: destination, saveToAlbum: saveToAlbum)
+        let id = addTask(pathOrURL: pathOrURL, destination: destination, saveToAlbum: saveToAlbum)
         enqueueOrStartTask(id: id)
         await updateBatchStateIfNeeded()
         return id
     }
-
-    /// 批量下载（注册并立即下载）
+    
+    /// 批量注册并立即启动下载任务，支持相对路径或完整URL
     ///
     /// - Parameters:
-    ///   - baseURL: 基础下载URL
-    ///   - filePaths: 文件路径(会与baseURL拼接 最终结果:baseURL+filePath)
+    ///   - pathsOrURLs: 路径/URL字符串数组
     ///   - destinationFolder: 保存目录(可选)
     ///   - saveToAlbum: 是否自动保存到相册
     /// - Returns: 任务ID数组
     ///
     /// ### 使用示例
     /// ```
-    /// let ids = await manager.batchDownload(baseURL: url, filePaths: ["1.png", "2.png"])
+    /// let ids = await manager.batchDownload(pathsOrURLs: ["/1.png","/2.png"])
     /// ```
     public func batchDownload(
-        baseURL: URL,
-        filePaths: [String],
+        pathsOrURLs: [String],
         destinationFolder: URL? = nil,
         saveToAlbum: Bool = false
     ) async -> [UUID] {
         var ids: [UUID] = []
-        for path in filePaths {
-            let fileURL = baseURL.appendingPathComponent(path)
-            let destFolder = destinationFolder ?? Self.defaultDownloadFolder()
-            let destURL = destFolder.appendingPathComponent(fileURL.lastPathComponent)
-            let id = await startDownload(from: fileURL, to: destURL, saveToAlbum: saveToAlbum)
+        for pathOrURL in pathsOrURLs {
+            let id = await startDownload(pathOrURL: pathOrURL, destination: destinationFolder?.appendingPathComponent((URL(string: pathOrURL)?.lastPathComponent) ?? (pathOrURL as NSString).lastPathComponent), saveToAlbum: saveToAlbum)
             ids.append(id)
         }
         return ids
     }
-
+    
     /// 启动所有任务（idle/paused）
     public func startAllTasks() {
         self.batchStart(ids: allTaskIDs())
@@ -389,9 +409,9 @@ public actor DownloadManager {
         self.maxConcurrentDownloads = max(1, count)
         Task { await self.checkAndStartNext() }
     }
-
+    
     // MARK: - 单任务控制
-
+    
     /// 启动单任务
     ///
     /// - Parameter id: 任务ID
@@ -401,7 +421,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-
+    
     /// 暂停单任务
     ///
     /// - Parameter id: 任务ID
@@ -424,7 +444,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         Task { await self.checkAndStartNext() }
     }
-
+    
     /// 恢复单任务
     ///
     /// - Parameter id: 任务ID
@@ -437,7 +457,7 @@ public actor DownloadManager {
             updateBatchStateIfNeeded()
         }
     }
-
+    
     /// 取消单个任务
     ///
     /// - Parameters:
@@ -484,7 +504,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-
+    
     /// 移除任务
     ///
     /// - Parameters:
@@ -510,9 +530,9 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-
+    
     // MARK: - 私有：任务调度与下载
-
+    
     /// 将任务加入队列或立即启动
     ///
     /// - Parameter id: 任务ID
@@ -529,7 +549,7 @@ public actor DownloadManager {
             tasks[id] = task
         }
     }
-
+    
     /// 内部启动任务
     ///
     /// - Parameter id: 任务ID
@@ -543,7 +563,7 @@ public actor DownloadManager {
             (destinationURL, [.createIntermediateDirectories, .removePreviousFile])
         }
         currentDownloadingCount += 1
-
+        
         let request = AF.download(
             currentTask.url,
             method: .get,
@@ -561,7 +581,7 @@ public actor DownloadManager {
         currentTask.response = request
         tasks[id] = currentTask
     }
-
+    
     /// 检查等待队列，尝试启动下一个任务
     private func checkAndStartNext() {
         while currentDownloadingCount < maxConcurrentDownloads, !pendingQueue.isEmpty {
@@ -572,9 +592,9 @@ public actor DownloadManager {
         }
         notifyProgressAndBatchState()
     }
-
+    
     // MARK: - 下载事件处理
-
+    
     /// 下载进度回调
     ///
     /// - Parameters:
@@ -590,7 +610,7 @@ public actor DownloadManager {
             notifySingleTaskUpdate(currentTask)
         }
     }
-
+    
     /// 下载完成回调
     ///
     /// - Parameters:
@@ -600,7 +620,7 @@ public actor DownloadManager {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         defer { Task { await self.checkAndStartNext() } }
-
+        
         if let _ = response.error {
             currentTask.state = .failed
             tasks[id] = currentTask
@@ -620,7 +640,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         notifySingleTaskUpdate(currentTask)
     }
-
+    
     /// 推送单任务更新事件
     ///
     /// - Parameter task: 内部任务结构体
@@ -640,9 +660,9 @@ public actor DownloadManager {
             }
         }
     }
-
+    
     // MARK: - 事件派发
-
+    
     /// 推送未完成和已完成任务列表
     private func notifyTaskListUpdate() {
         let all = allTaskInfos()
@@ -655,7 +675,7 @@ public actor DownloadManager {
             }
         }
     }
-
+    
     /// 推送整体进度和批量状态
     private func notifyProgressAndBatchState() {
         let progress = calcOverallProgress()
@@ -676,7 +696,7 @@ public actor DownloadManager {
             overallCompletedCalled = false
         }
     }
-
+    
     /// 检查并推送批量状态
     private func updateBatchStateIfNeeded() {
         let newState = calcBatchState()
@@ -685,9 +705,9 @@ public actor DownloadManager {
             notifyProgressAndBatchState()
         }
     }
-
+    
     // MARK: - 状态/查询接口
-
+    
     /// 获取所有任务信息
     ///
     /// - Returns: 所有任务的 DownloadTaskInfo 数组
@@ -704,14 +724,14 @@ public actor DownloadManager {
             )
         }
     }
-
+    
     /// 获取所有任务ID
     ///
     /// - Returns: 所有任务ID数组
     public func allTaskIDs() -> [UUID] {
         return Array(tasks.keys)
     }
-
+    
     /// 获取单个任务信息
     ///
     /// - Parameter id: 任务ID
@@ -728,9 +748,9 @@ public actor DownloadManager {
             cryoResult: task.cryoResult
         )
     }
-
+    
     // MARK: - 进度/批量状态计算
-
+    
     /// 计算所有未取消任务的平均进度
     ///
     /// - Returns: 平均进度
@@ -740,7 +760,7 @@ public actor DownloadManager {
         let sum = validTasks.map { min($0.progress, 1.0) }.reduce(0, +)
         return sum / Double(validTasks.count)
     }
-
+    
     /// 检查所有未取消任务是否全部完成
     ///
     /// - Returns: 是否全部完成
@@ -748,7 +768,7 @@ public actor DownloadManager {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
         return !validTasks.isEmpty && validTasks.allSatisfy { $0.state == .completed }
     }
-
+    
     /// 计算批量状态
     ///
     /// - Returns: 批量下载状态
@@ -760,9 +780,9 @@ public actor DownloadManager {
         if validTasks.contains(where: { $0.state == .downloading }) { return .downloading }
         return .idle
     }
-
+    
     // MARK: - 文件管理辅助
-
+    
     /// 获取默认下载目录
     ///
     /// - Returns: 下载目录URL
@@ -779,7 +799,7 @@ public actor DownloadManager {
         }
         return downloadsFolder
     }
-
+    
     /// 下载完成后保存到相册（仅支持图片/视频）
     ///
     /// - Parameter fileURL: 文件本地路径
