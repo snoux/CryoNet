@@ -199,14 +199,14 @@ public actor DownloadManager {
     ///
     /// - Parameter pathOrURL: 路径或完整URL
     /// - Returns: 绝对URL
-    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
+    func makeAbsoluteURL(from pathOrURL: String) -> URL? {
         if let url = URL(string: pathOrURL), url.scheme != nil {
             return url
-        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
-            return url.absoluteURL
-        } else {
-            return nil
         }
+        guard var base = baseURL else { return nil }
+
+        base.appendPathComponent(pathOrURL)
+        return base
     }
 
     // MARK: - 事件委托注册

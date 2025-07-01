@@ -296,14 +296,14 @@ public actor UploadManager {
     ///
     /// - Parameter pathOrURL: 路径或完整URL
     /// - Returns: 绝对URL
-    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
+    func makeAbsoluteURL(from pathOrURL: String) -> URL? {
         if let url = URL(string: pathOrURL), url.scheme != nil {
             return url
-        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
-            return url.absoluteURL
-        } else {
-            return nil
         }
+        guard var base = baseURL else { return nil }
+
+        base.appendPathComponent(pathOrURL)
+        return base
     }
     
     // MARK: - 委托注册与移除
@@ -337,6 +337,7 @@ public actor UploadManager {
         guard let url = makeAbsoluteURL(from: pathOrURL) else {
             fatalError("Invalid download url: \(pathOrURL)")
         }
+        print("\(pathOrURL) --- 注册请求地址 ---  \(url)")
         let id = UUID()
         let task = UploadTask(
             id: id,
