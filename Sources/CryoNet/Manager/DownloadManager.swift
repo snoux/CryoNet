@@ -41,31 +41,31 @@ public enum DownloadBatchState: String {
 }
 
 // MARK: - 下载任务信息
-/// 下载任务的公开信息结构体。
+/// 下载任务的信息结构体。
 ///
-/// 此结构体提供了下载任务的关键信息，供UI层展示和外部模块查询任务状态与详情。
-/// 它实现了 `Identifiable` 协议，方便在SwiftUI等框架中使用。
-public struct DownloadTaskInfo: Identifiable, Equatable {
-    public static func == (lhs: DownloadTaskInfo, rhs: DownloadTaskInfo) -> Bool {
+/// 该结构体用于管理和展示下载任务的关键信息，实现了 `Identifiable` 和 `Equatable` 协议，方便在SwiftUI等框架中使用。
+public struct DownloadTask: Identifiable, Equatable {
+    public static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
         lhs.id == rhs.id
     }
     /// 任务的唯一标识符。
     public let id: UUID
     /// 下载资源的URL。
     public let url: URL
+    /// 文件保存的本地路径。
+    public let destination: URL
+    /// 下载完成后是否自动保存到相册。
+    public let saveToAlbum: Bool
     /// 当前下载进度，范围从0.0到1.0。
     public var progress: Double
     /// 当前任务的状态。
     public var state: DownloadState
-    /// 文件保存的本地路径。
-    public var destination: URL
     /// 关联的Alamofire下载请求对象。
     public var response: DownloadRequest?
-    /// 附加参数（query/body参数，可选）
+    /// 附加参数（query/body参数，可选）。
     public let parameters: [String: Any]?
-    /// 单任务自定义header（可选）
+    /// 单任务自定义header（可选）。
     public let headers: HTTPHeaders?
-    
 }
 
 // MARK: - 下载管理器事件委托
@@ -76,15 +76,15 @@ public protocol DownloadManagerDelegate: AnyObject {
     /// 单任务状态或进度更新
     ///
     /// - Parameter task: 最新的任务信息
-    func downloadDidUpdate(task: DownloadTaskInfo)
+    func downloadDidUpdate(task: DownloadTask)
     /// 所有未完成任务更新时回调
     ///
     /// - Parameter tasks: 当前所有未完成任务
-    func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTaskInfo])
+    func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTask])
     /// 已完成任务更新时回调
     ///
     /// - Parameter tasks: 当前所有已完成任务
-    func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTaskInfo])
+    func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTask])
     /// 整体进度或批量状态更新时回调
     ///
     /// - Parameters:
@@ -93,33 +93,18 @@ public protocol DownloadManagerDelegate: AnyObject {
     func downloadManagerDidUpdateProgress(overallProgress: Double, batchState: DownloadBatchState)
 }
 public extension DownloadManagerDelegate {
-    func downloadDidUpdate(task: DownloadTaskInfo) {}
-    func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTaskInfo]) {}
-    func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTaskInfo]) {}
+    func downloadDidUpdate(task: DownloadTask) {}
+    func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTask]) {}
+    func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTask]) {}
     func downloadManagerDidUpdateProgress(overallProgress: Double, batchState: DownloadBatchState) {}
 }
 
-// MARK: - 内部任务结构体
-private struct DownloadTask {
-    let id: UUID
-    let url: URL
-    let destination: URL
-    let saveToAlbum: Bool
-    var progress: Double
-    var state: DownloadState
-    var response: DownloadRequest?
-    var cryoResult: CryoResult?
-    let parameters: [String: Any]?
-    let headers: HTTPHeaders?
-}
-
 // MARK: - 下载管理器
-/// 下载管理器，支持批量/单个下载、并发控制、进度与状态自动推送，支持额外参数与自定义header。
+/// 下载管理器，支持批量/单个下载、并发控制、进度与状态推送，支持额外参数与自定义header。
 ///
 /// 支持最大并发数设置，自动排队。
 /// 支持批量/单个暂停、恢复、取消、移除，并自动删除本地文件。
 /// 线程安全，基于 actor 实现。
-/// 推荐只监听 downloadDidUpdate / downloadManagerDidUpdateActiveTasks / downloadManagerDidUpdateCompletedTasks / downloadManagerDidUpdateProgress。
 ///
 /// - Parameters:
 ///   - identifier: 队列唯一ID，默认自动生成
@@ -138,7 +123,7 @@ private struct DownloadTask {
 /// ```
 ///
 /// - Note: 推荐仅在主UI层持有DownloadManager实例，避免多实例并发下载同一文件。
-/// - SeeAlso: ``DownloadManagerDelegate``, ``DownloadTaskInfo``
+/// - SeeAlso: ``DownloadManagerDelegate``
 public actor DownloadManager {
     public let identifier: String
     /// 下载基础URL。支持传相对路径给下载任务。
@@ -153,10 +138,11 @@ public actor DownloadManager {
     private let globalHeaders: HTTPHeaders?
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol?
-
-    private var interceptorAdapter:RequestInterceptor{
-        InterceptorAdapter(interceptor: interceptor,tokenManager: tokenManager)
+    
+    private var interceptorAdapter: RequestInterceptor {
+        InterceptorAdapter(interceptor: interceptor, tokenManager: tokenManager)
     }
+    
     /// 创建下载管理器
     ///
     /// - Parameters:
@@ -167,17 +153,9 @@ public actor DownloadManager {
     ///   - interceptor: 业务拦截器
     ///   - tokenManager: Token 管理
     ///
-    /// ### 使用示例
-    /// ```
-    /// let manager = DownloadManager(
-    ///     baseURL: URL(string: "https://files.example.com")
-    /// )
-    /// ```
-    ///
     /// - Note:
     ///   - ``RequestInterceptorProtocol`` 与 ``TokenManagerProtocol`` 需要搭配一起使用.
     ///   - 当``RequestInterceptorProtocol``为请求注入token时,会默认从传入的``TokenManagerProtocol``进行读取
-    
     public init(
         identifier: String = UUID().uuidString,
         baseURL: URL? = nil,
@@ -193,22 +171,22 @@ public actor DownloadManager {
         self.interceptor = interceptor
         self.tokenManager = tokenManager
     }
-
+    
     // MARK: - URL拼接辅助
     /// 将相对路径或完整URL转换为绝对URL
     ///
     /// - Parameter pathOrURL: 路径或完整URL
     /// - Returns: 绝对URL
-    func makeAbsoluteURL(from pathOrURL: String) -> URL? {
+    private func makeAbsoluteURL(from pathOrURL: String) -> URL? {
         if let url = URL(string: pathOrURL), url.scheme != nil {
             return url
+        } else if let baseURL, let url = URL(string: pathOrURL, relativeTo: baseURL) {
+            return url.absoluteURL
+        } else {
+            return nil
         }
-        guard var base = baseURL else { return nil }
-
-        base.appendPathComponent(pathOrURL)
-        return base
     }
-
+    
     // MARK: - 事件委托注册
     public func addDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.add(delegate)
@@ -216,9 +194,9 @@ public actor DownloadManager {
     public func removeDelegate(_ delegate: DownloadManagerDelegate) {
         delegates.remove(delegate)
     }
-
+    
     // MARK: - 任务注册与调度
-
+    
     /// 注册单个任务（支持参数/headers）
     ///
     /// - Parameters:
@@ -248,7 +226,6 @@ public actor DownloadManager {
             progress: 0,
             state: .idle,
             response: nil,
-            cryoResult: nil,
             parameters: parameters,
             headers: headers
         )
@@ -257,7 +234,7 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         return id
     }
-
+    
     /// 批量注册任务（支持参数/headers）
     ///
     /// - Parameters:
@@ -287,7 +264,7 @@ public actor DownloadManager {
         }
         return ids
     }
-
+    
     /// 启动单任务（注册并立即下载），支持参数/headers
     ///
     /// - Parameters:
@@ -315,7 +292,7 @@ public actor DownloadManager {
         await updateBatchStateIfNeeded()
         return id
     }
-
+    
     /// 批量注册并立即启动下载任务，支持参数/headers
     ///
     /// - Parameters:
@@ -345,7 +322,7 @@ public actor DownloadManager {
         }
         return ids
     }
-
+    
     /// 启动所有任务（idle/paused）
     public func startAllTasks() {
         self.batchStart(ids: allTaskIDs())
@@ -411,7 +388,7 @@ public actor DownloadManager {
         self.maxConcurrentDownloads = max(1, count)
         Task { await self.checkAndStartNext() }
     }
-
+    
     // MARK: - 单任务控制
     public func startTask(id: UUID) {
         enqueueOrStartTask(id: id)
@@ -489,9 +466,9 @@ public actor DownloadManager {
         notifyProgressAndBatchState()
         updateBatchStateIfNeeded()
     }
-
+    
     // MARK: - 私有：任务调度与下载
-
+    
     /// 将任务加入队列或立即启动。参数/headers会应用到实际请求。
     private func enqueueOrStartTask(id: UUID) {
         guard var task = tasks[id] else { return }
@@ -506,7 +483,7 @@ public actor DownloadManager {
             tasks[id] = task
         }
     }
-
+    
     /// 内部启动任务，支持参数/headers
     private func startTaskInternal(id: UUID) {
         guard var currentTask = tasks[id] else { return }
@@ -518,13 +495,13 @@ public actor DownloadManager {
             (destinationURL, [.createIntermediateDirectories, .removePreviousFile])
         }
         currentDownloadingCount += 1
-
+        
         // 合并全局header和任务header
         var mergedHeaders = globalHeaders ?? HTTPHeaders()
         if let headers = currentTask.headers {
             for h in headers { mergedHeaders.update(name: h.name, value: h.value) }
         }
-
+        
         // 支持参数（自动拼接query，或可扩展为POST/body方式）
         let method: HTTPMethod = .get // 如需post/put可扩展参数
         let urlRequestConvertible: URLConvertible
@@ -536,7 +513,7 @@ public actor DownloadManager {
         } else {
             urlRequestConvertible = currentTask.url
         }
-
+        
         let request = AF.download(
             urlRequestConvertible,
             method: method,
@@ -544,16 +521,16 @@ public actor DownloadManager {
             interceptor: interceptorAdapter,
             to: destination
         )
-        .downloadProgress { [weak self] progress in
-            Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
-        }
-        .responseData { [weak self] response in
-            Task { await self?.onComplete(id: id, response: response) }
-        }
+            .downloadProgress { [weak self] progress in
+                Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
+            }
+            .responseData { [weak self] response in
+                Task { await self?.onComplete(id: id, response: response) }
+            }
         currentTask.response = request
         tasks[id] = currentTask
     }
-
+    
     /// 检查等待队列，尝试启动下一个任务
     private func checkAndStartNext() {
         while currentDownloadingCount < maxConcurrentDownloads, !pendingQueue.isEmpty {
@@ -564,7 +541,7 @@ public actor DownloadManager {
         }
         notifyProgressAndBatchState()
     }
-
+    
     // MARK: - 下载事件处理
     private func onProgress(id: UUID, progress: Double) {
         guard var currentTask = tasks[id] else { return }
@@ -580,11 +557,13 @@ public actor DownloadManager {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         defer { Task { await self.checkAndStartNext() } }
-
-        if let _ = response.error {
-            currentTask.state = .failed
-            tasks[id] = currentTask
-        } else {
+        
+        let fileExists = FileManager.default.fileExists(atPath: currentTask.destination.path)
+        let httpCode = response.response?.statusCode ?? 0
+        let noError = response.error == nil
+        
+        // 判断下载是否真正成功：无错误、HTTP状态码为200～299、文件已写入本地
+        if noError, (200...299).contains(httpCode), fileExists {
             currentTask.progress = 1.0
             currentTask.state = .completed
             tasks[id] = currentTask
@@ -595,31 +574,25 @@ public actor DownloadManager {
                 }
 #endif
             }
+        } else {
+            currentTask.state = .failed
+            tasks[id] = currentTask
         }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         notifySingleTaskUpdate(currentTask)
     }
-
+    
+    
     /// 推送单任务更新事件
     private func notifySingleTaskUpdate(_ task: DownloadTask) {
-        let info = DownloadTaskInfo(
-            id: task.id,
-            url: task.url,
-            progress: task.progress,
-            state: task.state,
-            destination: task.destination,
-            response: task.response,
-            parameters: task.parameters,
-            headers: task.headers
-        )
         for delegate in delegates.allObjects {
             Task { @MainActor in
-                (delegate as? DownloadManagerDelegate)?.downloadDidUpdate(task: info)
+                (delegate as? DownloadManagerDelegate)?.downloadDidUpdate(task: task)
             }
         }
     }
-
+    
     // MARK: - 事件派发
     private func notifyTaskListUpdate() {
         let all = allTaskInfos()
@@ -653,43 +626,22 @@ public actor DownloadManager {
             notifyProgressAndBatchState()
         }
     }
-
+    
     // MARK: - 状态/查询接口
-
+    
     /// 获取所有任务信息
-    public func allTaskInfos() -> [DownloadTaskInfo] {
-        return tasks.values.map {
-            DownloadTaskInfo(
-                id: $0.id,
-                url: $0.url,
-                progress: $0.progress,
-                state: $0.state,
-                destination: $0.destination,
-                response: $0.response,
-                parameters: $0.parameters,
-                headers: $0.headers
-            )
-        }
+    public func allTaskInfos() -> [DownloadTask] {
+        return Array(tasks.values)
     }
     /// 获取所有任务ID
     public func allTaskIDs() -> [UUID] {
         return Array(tasks.keys)
     }
     /// 获取单个任务信息
-    public func getTaskInfo(id: UUID) -> DownloadTaskInfo? {
-        guard let task = tasks[id] else { return nil }
-        return DownloadTaskInfo(
-            id: task.id,
-            url: task.url,
-            progress: task.progress,
-            state: task.state,
-            destination: task.destination,
-            response: task.response,
-            parameters: task.parameters,
-            headers: task.headers
-        )
+    public func getTaskInfo(id: UUID) -> DownloadTask? {
+        return tasks[id]
     }
-
+    
     // MARK: - 进度/批量状态计算
     private func calcOverallProgress() -> Double {
         let validTasks = tasks.values.filter { $0.state != .cancelled }
@@ -709,7 +661,7 @@ public actor DownloadManager {
         if validTasks.contains(where: { $0.state == .downloading }) { return .downloading }
         return .idle
     }
-
+    
     // MARK: - 文件管理辅助
     private static func defaultDownloadFolder() -> URL {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -719,7 +671,7 @@ public actor DownloadManager {
         }
         return downloadsFolder
     }
-
+    
     private static func saveToAlbumIfNeeded(fileURL: URL) async {
 #if os(iOS) || os(watchOS) || os(macOS)
         let fileExtension = fileURL.pathExtension.lowercased()

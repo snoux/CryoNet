@@ -189,7 +189,7 @@ public extension CryoResult {
                 return
             }
 
-            switch interceptor.interceptResponseWithCompleteData(response) {
+            switch interceptor.interceptResponse(response) {
             case .success(let data):
                 do {
                     let json = try JSON(data: data)
@@ -257,7 +257,7 @@ public extension CryoResult {
                 return
             }
 
-            switch interceptor.interceptResponseWithCompleteData(response) {
+            switch interceptor.interceptResponse(response) {
             case .success(let data):
                 do {
                     let json = try JSON(data: data)

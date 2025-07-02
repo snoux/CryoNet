@@ -14,8 +14,6 @@ public protocol JSONParseable {
     init?(json: JSON)
 }
 
-
-
 // MARK: - SwiftyJSON 模型转换扩展
 
 public extension JSON {
