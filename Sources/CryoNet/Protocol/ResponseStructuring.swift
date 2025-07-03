@@ -30,6 +30,7 @@ public protocol ResponseStructureConfig: Sendable {
     
     /// 判断响应是否成功
     func isSuccess(json: JSON) -> Bool
+    
     /// 从JSON中提取数据
-    func extractData(from json: JSON, originalData: Data) -> Result<Data, Error>
+    func extractJSON(from json: JSON) -> JSON
 }

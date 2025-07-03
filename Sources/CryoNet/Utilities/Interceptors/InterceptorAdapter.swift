@@ -8,6 +8,10 @@ import SwiftyJSON
  默认响应结构配置，适用于绝大多数标准接口响应。
  */
 open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendable {
+    open func extractJSON(from json: SwiftyJSON.JSON) -> SwiftyJSON.JSON {
+        json[dataKey]
+    }
+
     public let codeKey: String
     public let messageKey: String
     public let dataKey: String
@@ -36,37 +40,9 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
         return json[codeKey].intValue == successCode
     }
     
-    /// 从JSON提取数据
+    /// 从JSON提取数据(可重写)
     open func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
-        let targetData = json[dataKey]
-        // 如果不存在或为 null，直接返回原始 data
-        if !targetData.exists() || targetData.type == .null {
-            return .success(originalData)
-        }
-        do {
-            let validData: Data
-            switch targetData.type {
-            case .dictionary, .array:
-                validData = try targetData.rawData()
-            case .string:
-                validData = Data(targetData.stringValue.utf8)
-            case .number, .bool:
-                let stringValue = targetData.stringValue
-                validData = Data(stringValue.utf8)
-            default:
-                return .success(originalData)
-            }
-            return .success(validData)
-        } catch {
-            return .failure(NSError(
-                domain: "DataError",
-                code: -1004,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "数据转换失败",
-                    NSUnderlyingErrorKey: error
-                ]
-            ))
-        }
+        return JSON.extractDataFromJSON(extractJSON(from: json), originalData: originalData)
     }
     
     /// 获取配置信息（便于调试）
@@ -193,8 +169,10 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     
     /// 从JSON中提取业务数据，可重写
     open func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
-        responseConfig.extractData(from: json, originalData: data)
+        return JSON.extractDataFromJSON(responseConfig.extractJSON(from: json), originalData: data)
     }
+    
+    
     
     /// 处理自定义业务错误，可重写
     open func handleCustomError(

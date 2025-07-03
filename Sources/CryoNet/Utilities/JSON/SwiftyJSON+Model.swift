@@ -17,6 +17,41 @@ public protocol JSONParseable {
 // MARK: - SwiftyJSON 模型转换扩展
 
 public extension JSON {
+    /// 从JSON中提取目标数据为Data
+    /// - Parameters:
+    ///   - json: 目标JSON
+    ///   - originalData: 原始数据
+    /// - Returns: 提取后的Data，或原始Data，或失败
+    static func extractDataFromJSON(_ json: SwiftyJSON.JSON, originalData: Data) -> Result<Data, Error> {
+        if !json.exists() || json.type == .null {
+            return .success(originalData)
+        } else {
+            do {
+                let validData: Data
+                switch json.type {
+                case .dictionary, .array:
+                    validData = try json.rawData()
+                case .string:
+                    validData = Data(json.stringValue.utf8)
+                case .number, .bool:
+                    validData = Data(json.stringValue.utf8)
+                default:
+                    return .success(originalData)
+                }
+                return .success(validData)
+            } catch {
+                return .failure(NSError(
+                    domain: "DataError",
+                    code: -1004,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "数据转换失败",
+                        NSUnderlyingErrorKey: error
+                    ]
+                ))
+            }
+        }
+    }
+    
     
     /**
      直接从 JSON 对象转换为遵循 JSONParseable 协议的模型
