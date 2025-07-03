@@ -469,6 +469,14 @@ public actor UploadManager<Model: JSONParseable> {
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
+    
+    // 暂停全部任务（可以恢复）
+    public func stopAllTasks() {
+        let ids = allTaskIDs()
+        batchPause(ids: ids)
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+    }
 
     // 删除全部任务（彻底删除，无法恢复）
     public func deleteAllTasks() {
