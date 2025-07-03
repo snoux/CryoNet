@@ -55,7 +55,18 @@ public struct UploadFileItem {
 // MARK: - 上传状态
 /// 上传任务状态枚举
 public enum UploadState: String {
-    case idle, uploading, paused, completed, failed, cancelled
+    /// 任务处于等待状态，尚未开始下载或已完成。
+    case idle
+    /// 任务正在进行上传。
+    case uploading
+    /// 任务已暂停，可以恢复。
+    case paused
+    /// 任务已成功完成上传。
+    case completed
+    /// 任务上传失败。
+    case failed
+    /// 任务已被取消。
+    case cancelled
 }
 
 // MARK: - 批量上传整体状态
@@ -447,6 +458,37 @@ public actor UploadManager<Model: JSONParseable> {
     /// 批量删除任务
     public func batchDelete(ids: [UUID]) {
         for id in ids { deleteTask(id: id) }
+    }
+    
+    // 取消全部任务（可以恢复）
+    public func cancelAllTasks() {
+        let ids = allTaskIDs()
+        for id in ids {
+            cancelTask(id: id)
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+    }
+
+    // 删除全部任务（彻底删除，无法恢复）
+    public func deleteAllTasks() {
+        let ids = allTaskIDs()
+        for id in ids {
+            deleteTask(id: id)
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+    }
+    
+    
+    // 启动全部任务（只会启动 idle、paused、cancelled、failed 状态的任务）
+    public func startAllTasks() {
+        let ids = allTaskIDs()
+        for id in ids {
+            startTask(id: id)
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
     }
 
     // MARK: - 上传进度与完成回调

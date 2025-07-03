@@ -28,14 +28,31 @@ public actor DownloadManagerPool {
     public func allManagers() -> [DownloadManager] {
         Array(managers.values)
     }
-
+    
     /// 移除指定 identifier 的 DownloadManager
-    public func removeManager(for identifier: String) {
-        managers[identifier] = nil
+    /// - Parameters:
+    ///   - identifier: DownloadManager  的  identifier
+    ///   - shouldDeleteFile: 是否同时删除已下载的文件,默认不删除
+    public func removeManager(
+        for identifier: String,
+        shouldDeleteFile:Bool = false
+    ) {
+        Task{
+            if let manager = managers[identifier] {
+                await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
+            }
+            managers[identifier] = nil
+        }
     }
-
+    
     /// 移除全部 DownloadManager
-    public func removeAll() {
-        managers.removeAll()
+    /// - Parameter shouldDeleteFile: 是否同时删除已下载的文件,默认不删除
+    public func removeAll(shouldDeleteFile:Bool = false) {
+        Task{
+            for manager in allManagers() {
+                await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
+            }
+            managers.removeAll()
+        }
     }
 }

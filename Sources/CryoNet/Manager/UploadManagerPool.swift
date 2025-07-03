@@ -2,10 +2,16 @@ import Foundation
 import Alamofire
 
 // 类型擦除协议
-public protocol AnyUploadManager: AnyObject {}
+public protocol AnyUploadManager: AnyObject {
+    func deleteAllTasks() async
+}
 
 // 泛型上传管理器遵循类型擦除协议
-extension UploadManager: AnyUploadManager {}
+extension UploadManager: AnyUploadManager {
+    public func deleteAllTasks() async {
+        await self.deleteAllTasks()
+    }
+}
 
 // 多实例池，支持泛型队列
 public actor UploadManagerPool {
@@ -57,11 +63,21 @@ public actor UploadManagerPool {
 
     /// 移除指定 identifier 的 UploadManager
     public func removeManager(for identifier: String) {
-        managers[identifier] = nil
+        Task{
+            if let manager = managers[identifier] {
+                await manager.deleteAllTasks()
+            }
+            managers[identifier] = nil
+        }
     }
 
     /// 清空全部
     public func removeAll() {
-        managers.removeAll()
+        Task{
+            for manager in allManagers() {
+                await manager.deleteAllTasks()
+            }
+            managers.removeAll()
+        }
     }
 }

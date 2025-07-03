@@ -331,12 +331,44 @@ public actor DownloadManager {
     public func stopAllTasks() {
         self.batchPause(ids: allTaskIDs())
     }
+    
+    /// 取消全部任务（可以重新启动/恢复）
+    ///
+    /// - Parameter shouldDeleteFile: 是否同时删除已下载文件,默认不删除
+    public func cancelAllTasks(shouldDeleteFile: Bool = false) {
+        let ids = allTaskIDs()
+        for id in ids {
+            cancelTask(id: id, shouldDeleteFile: shouldDeleteFile)
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+
+    /// 删除全部任务（彻底删除，无法恢复/重新启动）
+    ///
+    /// - Parameter shouldDeleteFile: 是否同时删除已下载文件,默认删除
+    public func removeAllTasks(shouldDeleteFile: Bool = true) {
+        let ids = allTaskIDs()
+        for id in ids {
+            // 先取消（移除前确保下载终止&文件可选删除）
+            cancelTask(id: id, shouldDeleteFile: shouldDeleteFile)
+            tasks[id] = nil
+            if let idx = pendingQueue.firstIndex(of: id) {
+                pendingQueue.remove(at: idx)
+            }
+        }
+        notifyTaskListUpdate()
+        notifyProgressAndBatchState()
+        updateBatchStateIfNeeded()
+    }
+    
     /// 批量启动任务
     ///
     /// - Parameter ids: 需要启动的任务ID数组
     public func batchStart(ids: [UUID]) {
         for id in ids {
-            if let task = tasks[id], task.state == .idle || task.state == .paused {
+            if let task = tasks[id], task.state == .idle || task.state == .paused || task.state == .cancelled || task.state == .failed{
                 enqueueOrStartTask(id: id)
             }
         }
@@ -417,7 +449,7 @@ public actor DownloadManager {
     }
     public func resumeTask(id: UUID) {
         guard let task = tasks[id] else {return}
-        if task.state == .paused || task.state == .idle || task.state == .failed {
+        if task.state == .paused || task.state == .idle || task.state == .failed || task.state == .cancelled{
             enqueueOrStartTask(id: id)
             notifyTaskListUpdate()
             notifyProgressAndBatchState()
