@@ -592,7 +592,7 @@ extension CryoResult {
     }
 
     /// 异步拦截器获取模型
-    /// - Parameter type: 模型类型
+    /// - Parameter type: 模型类型(Codable)
     /// - Returns: 解码后的模型
     public func interceptModelAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
@@ -605,6 +605,8 @@ extension CryoResult {
     }
 
     /// 异步拦截器获取完整数据模型
+    /// - Parameter type: 模型类型(Codable)
+    /// - Returns: 解码后的模型
     public func interceptModelCompleteDataAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
             interceptModelCompleteData(type: type) { model in
@@ -616,6 +618,8 @@ extension CryoResult {
     }
 
     /// 异步拦截器获取完整 SwiftyJSON
+    /// 
+    /// - Returns: JSON
     public func interceptJSONAsync() async throws -> JSON {
         return try await withCheckedThrowingContinuation { continuation in
             interceptJSON { json in
@@ -627,6 +631,9 @@ extension CryoResult {
     }
 
     /// 异步拦截器获取模型数组
+    /// 
+    /// - Parameter type: 模型类型(Codable)
+    /// - Returns: 模型数组
     public func interceptModelArrayAsync<T: Codable>(_ type: T.Type) async throws -> [T] {
         return try await withCheckedThrowingContinuation { continuation in
             interceptModelArray(type: type) { models in

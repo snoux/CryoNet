@@ -3,12 +3,18 @@ import Alamofire
 import SwiftyJSON
 
 // MARK: - 流式请求结果对象
-/**
- CryoStreamResult
- 封装 Alamofire DataStreamRequest，提供多种流式数据消费接口：
- - 支持原始数据块、SwiftyJSON、Decodable、SSE、自动模型判定等异步流
- - 支持自动内容类型判定、流式调试日志、流控制器
- */
+
+/// CryoStreamResult
+///
+/// 封装 Alamofire DataStreamRequest，提供多种流式数据消费接口：
+/// - 支持原始数据块、SwiftyJSON、Decodable、SSE、自动模型判定等异步流
+/// - 支持自动内容类型判定、流式调试日志、流控制器
+///
+/// ### 使用示例
+/// ```swift
+/// let stream = CryoStreamResult(request: dataStreamRequest)
+/// for try await data in stream.dataStream() { ... }
+/// ```
 @available(macOS 10.15, iOS 13, *)
 public class CryoStreamResult {
     /// 底层 Alamofire DataStreamRequest
@@ -27,12 +33,12 @@ public class CryoStreamResult {
 }
 
 // MARK: - 原始数据流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取原始 Data 类型的异步流
-     - Returns: AsyncThrowingStream<Data, Error>
-     */
+    /// 获取原始 Data 类型的异步流
+    ///
+    /// - Returns: AsyncThrowingStream<Data, Error>
     func dataStream() -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
@@ -54,12 +60,12 @@ public extension CryoStreamResult {
 }
 
 // MARK: - JSON 对象流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取 SwiftyJSON 的 JSON 对象流
-     - Returns: AsyncThrowingStream<JSON, Error>
-     */
+    /// 获取 SwiftyJSON 的 JSON 对象流
+    ///
+    /// - Returns: AsyncThrowingStream<JSON, Error>
     func jsonStream() -> AsyncThrowingStream<JSON, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
@@ -82,13 +88,13 @@ public extension CryoStreamResult {
 }
 
 // MARK: - JSONParseable 模型流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取 JSONParseable 协议模型流
-     - Parameter type: 目标模型类型（需实现 JSONParseable 协议）
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 获取 JSONParseable 协议模型流
+    ///
+    /// - Parameter type: 目标模型类型（需实现 JSONParseable 协议）
+    /// - Returns: AsyncThrowingStream<T, Error>
     func modelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
@@ -116,15 +122,15 @@ public extension CryoStreamResult {
 }
 
 // MARK: - Decodable 模型流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取 Decodable 协议模型流
-     - Parameters:
-        - type: Decodable 模型类型
-        - decoder: 解码器，默认 JSONDecoder
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 获取 Decodable 协议模型流
+    ///
+    /// - Parameters:
+    ///   - type: Decodable 模型类型
+    ///   - decoder: 解码器，默认 JSONDecoder
+    /// - Returns: AsyncThrowingStream<T, Error>
     func decodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
@@ -156,15 +162,15 @@ public extension CryoStreamResult {
 }
 
 // MARK: - 行分隔 Decodable 流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取按行分隔的 Decodable 模型流（如 OpenAI 等接口格式）
-     - Parameters:
-        - type: Decodable 模型类型
-        - decoder: 解码器，默认 JSONDecoder
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 获取按行分隔的 Decodable 模型流（如 OpenAI 等接口格式）
+    ///
+    /// - Parameters:
+    ///   - type: Decodable 模型类型
+    ///   - decoder: 解码器，默认 JSONDecoder
+    /// - Returns: AsyncThrowingStream<T, Error>
     func lineDelimitedDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             var buffer = Data()
@@ -210,12 +216,12 @@ public extension CryoStreamResult {
 }
 
 // MARK: - SSE 事件流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     获取 SSE（Server-Sent Events）事件字符串流
-     - Returns: AsyncThrowingStream<String, Error>
-     */
+    /// 获取 SSE（Server-Sent Events）事件字符串流
+    ///
+    /// - Returns: AsyncThrowingStream<String, Error>
     func sseStream() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             var buffer = ""
@@ -248,11 +254,10 @@ public extension CryoStreamResult {
         }
     }
 
-    /**
-     将 SSE 事件流转换为 JSONParseable 模型流
-     - Parameter type: JSONParseable 类型
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 将 SSE 事件流转换为 JSONParseable 模型流
+    ///
+    /// - Parameter type: JSONParseable 类型
+    /// - Returns: AsyncThrowingStream<T, Error>
     func sseModelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -274,13 +279,12 @@ public extension CryoStreamResult {
         }
     }
 
-    /**
-     将 SSE 事件流转换为 Decodable 模型流
-     - Parameters:
-        - type: Decodable 类型
-        - decoder: 解码器，默认 JSONDecoder
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 将 SSE 事件流转换为 Decodable 模型流
+    ///
+    /// - Parameters:
+    ///   - type: Decodable 类型
+    ///   - decoder: 解码器，默认 JSONDecoder
+    /// - Returns: AsyncThrowingStream<T, Error>
     func sseDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -306,11 +310,10 @@ public extension CryoStreamResult {
         }
     }
 
-    /**
-     私有：提取 SSE 事件中的 data 内容
-     - Parameter event: SSE 事件字符串
-     - Returns: data 行内容，如果没有则返回 nil
-     */
+    /// 私有：提取 SSE 事件中的 data 内容
+    ///
+    /// - Parameter event: SSE 事件字符串
+    /// - Returns: data 行内容，如果没有则返回 nil
     private static func extractSSEData(from event: String) -> String? {
         let lines = event.split(separator: "\n")
         for line in lines {
@@ -323,15 +326,15 @@ public extension CryoStreamResult {
 }
 
 // MARK: - 自动格式判定流
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     根据 Content-Type 自动判定并返回合适的 Decodable 流
-     - Parameters:
-        - type: Decodable 类型
-        - decoder: 解码器
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 根据 Content-Type 自动判定并返回合适的 Decodable 流
+    ///
+    /// - Parameters:
+    ///   - type: Decodable 类型
+    ///   - decoder: 解码器
+    /// - Returns: AsyncThrowingStream<T, Error>
     func autoDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         if let contentType = request.response?.headers.value(for: "Content-Type"),
            contentType.contains("text/event-stream") {
@@ -340,11 +343,10 @@ public extension CryoStreamResult {
         return lineDelimitedDecodableStream(type, decoder: decoder)
     }
 
-    /**
-     根据 Content-Type 自动判定并返回合适的 JSONParseable 流
-     - Parameter type: JSONParseable 类型
-     - Returns: AsyncThrowingStream<T, Error>
-     */
+    /// 根据 Content-Type 自动判定并返回合适的 JSONParseable 流
+    ///
+    /// - Parameter type: JSONParseable 类型
+    /// - Returns: AsyncThrowingStream<T, Error>
     func autoModelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         if let contentType = request.response?.headers.value(for: "Content-Type"),
            contentType.contains("text/event-stream") {
@@ -355,10 +357,10 @@ public extension CryoStreamResult {
 }
 
 // MARK: - 通用流式数据项
-/**
- StreamDataItem
- 封装流式数据块：支持原始Data、SwiftyJSON、模型、SSE事件、错误等类型的统一包装
- */
+
+/// StreamDataItem
+///
+/// 封装流式数据块：支持原始Data、SwiftyJSON、模型、SSE事件、错误等类型的统一包装
 public enum StreamDataItem {
     case data(Data)
     case json(JSON)
@@ -401,10 +403,9 @@ public enum StreamDataItem {
 
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     通用流式数据项流，自动按内容类型判断封装
-     - Returns: AsyncThrowingStream<StreamDataItem, Error>
-     */
+    /// 通用流式数据项流，自动按内容类型判断封装
+    ///
+    /// - Returns: AsyncThrowingStream<StreamDataItem, Error>
     func asStreamDataItems() -> AsyncThrowingStream<StreamDataItem, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -439,12 +440,12 @@ public extension CryoStreamResult {
 }
 
 // MARK: - 调试日志
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
-    /**
-     启用调试日志（仅 Debug 编译下打印 cURL 及数据块信息）
-     - Returns: Self
-     */
+    /// 启用调试日志（仅 Debug 编译下打印 cURL 及数据块信息）
+    ///
+    /// - Returns: Self
     func enableDebugLogging() -> Self {
         #if DEBUG
         request
@@ -476,11 +477,11 @@ public extension CryoStreamResult {
 }
 
 // MARK: - 控制管理
-/**
- CryoStreamController
- 用于管理和控制流式请求的控制器，支持随时启动、停止流消费任务。
- 提供多种流回调启动方式：Data、JSON、Decodable、SSE 事件
- */
+
+/// CryoStreamController
+///
+/// 用于管理和控制流式请求的控制器，支持随时启动、停止流消费任务。
+/// 提供多种流回调启动方式：Data、JSON、Decodable、SSE 事件
 @available(macOS 10.15, iOS 13, *)
 public final class CryoStreamController {
     /// 关联的 CryoStreamResult
@@ -491,15 +492,15 @@ public final class CryoStreamController {
     private(set) public var isActive: Bool = false
 
     /// 初始化
+    ///
     /// - Parameter streamResult: CryoStreamResult 实例
     public init(streamResult: CryoStreamResult) {
         self.streamResult = streamResult
     }
 
-    /**
-     启动原始 Data 流消费
-     - Parameter onData: 消费闭包，返回 false 可提前结束流
-     */
+    /// 启动原始 Data 流消费
+    ///
+    /// - Parameter onData: 消费闭包，返回 false 可提前结束流
     public func startDataStream(onData: @escaping (Data) -> Bool) {
         stop()
         isActive = true
@@ -517,10 +518,9 @@ public final class CryoStreamController {
         }
     }
 
-    /**
-     启动 JSON 流消费
-     - Parameter onJSON: 消费闭包，返回 false 可提前结束流
-     */
+    /// 启动 JSON 流消费
+    ///
+    /// - Parameter onJSON: 消费闭包，返回 false 可提前结束流
     public func startJSONStream(onJSON: @escaping (JSON) -> Bool) {
         stop()
         isActive = true
@@ -538,12 +538,11 @@ public final class CryoStreamController {
         }
     }
 
-    /**
-     启动 Decodable 流消费
-     - Parameters:
-        - type: Decodable 类型
-        - onModel: 消费闭包
-     */
+    /// 启动 Decodable 流消费
+    ///
+    /// - Parameters:
+    ///   - type: Decodable 类型
+    ///   - onModel: 消费闭包
     public func startDecodableStream<T: Decodable>(_ type: T.Type, onModel: @escaping (T) -> Bool) {
         stop()
         isActive = true
@@ -561,10 +560,9 @@ public final class CryoStreamController {
         }
     }
 
-    /**
-     启动 SSE 事件字符串流消费
-     - Parameter onEvent: 消费闭包
-     */
+    /// 启动 SSE 事件字符串流消费
+    ///
+    /// - Parameter onEvent: 消费闭包
     public func startSSEStream(onEvent: @escaping (String) -> Bool) {
         stop()
         isActive = true
@@ -582,9 +580,7 @@ public final class CryoStreamController {
         }
     }
 
-    /**
-     停止流式请求（可随时调用，支持多线程安全）
-     */
+    /// 停止流式请求（可随时调用，支持多线程安全）
     public func stop() {
         guard isActive else { return }
         isActive = false

@@ -118,7 +118,7 @@ public struct CryoNetConfiguration: Sendable {
 ///   - 所有请求和下载操作都基于``CryoNetConfiguration`` 、``RequestModel``。
 ///   - 示例中演示了如何获取响应数据为模型,也可以响应为其他数据格式,或者直接从拦截器获取指定数据,具体请查看``CryoResult``
 ///
-/// - SeeAlso: ``CryoNetConfiguration``, ``RequestModel``, ``DownloadModel``, ``CryoResult``, ``CryoStreamResult``
+/// - SeeAlso: ``CryoNetConfiguration``, ``RequestModel``, ``CryoResult``, ``CryoStreamResult``
 @available(macOS 10.15, iOS 13, *)
 public class CryoNet {
     /// 内部持有的 ``CryoNetConfiguration`` 实例，所有网络操作都将基于此配置。
@@ -299,62 +299,6 @@ private extension CryoNet {
             return nil
         }
     }
-
-    /// 内部方法：执行文件上传操作。
-    ///
-    /// 此方法封装了 `Alamofire` 的 `AF.upload` 功能，处理多部分表单数据，
-    /// 包括文件数据和额外的参数，并应用请求头和拦截器。
-    ///
-    /// - Parameters:
-    ///   - model: 包含请求路径、方法等信息的 ``RequestModel`` 实例。
-    ///   - files: 包含要上传文件数据的 ``UploadData`` 数组。
-    ///   - parameters: 随文件上传的其他键值对参数。
-    ///   - headers: 本次请求的额外 HTTP 请求头。
-    ///   - interceptor: 可选的请求拦截器，用于本次上传。
-    ///   - config: 当前 ``CryoNet`` 实例的配置对象。
-    ///
-    /// - Returns: 一个 `DataRequest` 实例，代表了文件上传请求。
-    ///
-    /// - Note:
-    ///   - 此方法是 ``upload(_:files:parameters:headers:interceptor:)`` 公共方法的内部实现细节。
-    ///   - 文件数据可以是 `Data` 或 `URL` 类型。
-    ///
-    /// - SeeAlso: ``upload(_:files:parameters:headers:interceptor:)``, ``RequestModel``, ``UploadData``
-    private func uploadFile(
-        _ model: RequestModel,
-        files: [UploadData],
-        parameters: [String: Any],
-        headers: [HTTPHeader],
-        interceptor: (any RequestInterceptor)? = nil,
-        config: CryoNetConfiguration
-    ) -> DataRequest {
-        let fullURL = model.fullURL(with: config.basicURL)
-        return AF.upload(
-            multipartFormData: { multipart in
-                files.forEach { item in
-                    switch item.file {
-                    case .fileData(let data):
-                        if let data = data {
-                            multipart.append(data, withName: item.name, fileName: item.fileName)
-                        }
-                    case .fileURL(let url):
-                        if let url = url {
-                            multipart.append(url, withName: item.name)
-                        }
-                    }
-                }
-                parameters.forEach { key, value in
-                    if let data = self.anyToData(value) {
-                        multipart.append(data, withName: key)
-                    }
-                }
-            },
-            to: fullURL,
-            method: model.method,
-            headers: mergeHeaders(headers, config: config),
-            interceptor: interceptor
-        )
-    }
 }
 
 
@@ -362,70 +306,6 @@ private extension CryoNet {
 
 @available(macOS 10.15, iOS 13, *)
 public extension CryoNet {
-
-    /// 发起一个文件上传请求。
-    ///
-    /// 此方法用于将文件和可选参数作为多部分表单数据上传到服务器。
-    /// 它会自动处理基础 URL、请求头合并以及拦截器的应用。
-    ///
-    /// - Parameters:
-    ///   - model: 包含上传目标路径和 HTTP 方法的 ``RequestModel`` 实例。
-    ///   - files: 一个 ``UploadData`` 数组，每个元素代表一个要上传的文件及其相关信息。
-    ///   - parameters: 可选的额外参数字典，将作为表单字段随文件一起上传。默认为空字典。
-    ///   - headers: 可选的额外 HTTP 请求头数组，将与 ``CryoNetConfiguration`` 中的基础请求头合并。默认为空数组。
-    ///   - interceptor: 可选的自定义请求拦截器，如果提供，将覆盖 ``CryoNetConfiguration`` 中的默认拦截器。默认为 `nil`。
-    ///
-    /// - Returns: 一个 ``CryoResult`` 实例，用于链式调用处理上传响应。
-    ///
-    /// ### 使用示例
-    /// ```swift
-    /// // 假设 imageData 是要上传的 Data，imageURL 是要上传的本地文件 URL
-    /// let imageData = Data("some image data".utf8)
-    /// let imageURL = URL(fileURLWithPath: "/path/to/your/image.jpg")
-    ///
-    /// let uploadData1 = UploadData(file: .fileData(imageData), name: "photo", fileName: "my_photo.png")
-    /// let uploadData2 = UploadData(file: .fileURL(imageURL), name: "document", fileName: "report.pdf")
-    ///
-    /// cryoNet.upload(
-    ///     MyAPI.uploadFile,
-    ///     files: [uploadData1, uploadData2],
-    ///     parameters: ["description": "User profile picture"],
-    ///     headers: [HTTPHeader(name: "X-Custom-Upload-Header", value: "true")]
-    /// )
-    /// .responseJSON { response in
-    ///     debugPrint(response)
-    /// }
-    /// ```
-    ///
-    /// - SeeAlso: ``RequestModel``, ``UploadData``, ``CryoResult``, ``uploadFile(_:files:parameters:headers:interceptor:config:)``
-    @available(*, deprecated, message: "即将弃用，请使用 UploadManager 的 batchUpload方法")
-    @discardableResult
-    func upload(
-        _ model: RequestModel,
-        files: [UploadData],
-        parameters: [String: Any] = [:],
-        headers: [HTTPHeader] = [],
-        interceptor: RequestInterceptorProtocol? = nil
-    ) -> CryoResult {
-        let config = self.getConfiguration()
-        let userInterceptor = interceptor ?? config.interceptor
-        var adapter: InterceptorAdapter? = nil
-        if let _ = userInterceptor{
-            adapter = InterceptorAdapter(
-                interceptor: userInterceptor,
-                tokenManager: config.tokenManager
-            )
-        }
-        let request = uploadFile(
-            model,
-            files: files,
-            parameters: parameters,
-            headers: headers,
-            interceptor: adapter,
-            config: config
-        ).validate()
-        return CryoResult(request: request, interceptor: userInterceptor)
-    }
 
     /// 发起一个普通的 HTTP 网络请求（GET, POST, PUT, DELETE 等）。
     ///

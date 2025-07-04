@@ -2,21 +2,27 @@ import Foundation
 import Alamofire
 import SwiftyJSON
 
-
 // MARK: - 默认响应结构配置
-/**
- 默认响应结构配置，适用于绝大多数标准接口响应。
- */
+
+/// 默认响应结构配置，适用于绝大多数标准接口响应。
+///
+/// 用于统一解析接口响应中的业务状态码、消息与数据部分。
 open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendable {
+
+    /// 从 JSON 提取业务数据字段（可重写）
     open func extractJSON(from json: SwiftyJSON.JSON) -> SwiftyJSON.JSON {
         json[dataKey]
     }
 
+    /// 状态码字段名
     public let codeKey: String
+    /// 消息字段名
     public let messageKey: String
+    /// 数据字段名
     public let dataKey: String
+    /// 成功状态码
     public let successCode: Int
-    
+
     /// 初始化方法
     /// - Parameters:
     ///   - codeKey: 状态码字段名
@@ -34,18 +40,21 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
         self.dataKey = dataKey
         self.successCode = successCode
     }
-    
+
     /// 判断响应是否成功
+    /// - Returns: 是否业务成功
     open func isSuccess(json: JSON) -> Bool {
         return json[codeKey].intValue == successCode
     }
-    
-    /// 从JSON提取数据(可重写)
+
+    /// 从 JSON 提取数据（可重写）
+    /// - Returns: 提取的数据或错误
     open func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
         return JSON.extractDataFromJSON(extractJSON(from: json), originalData: originalData)
     }
-    
+
     /// 获取配置信息（便于调试）
+    /// - Returns: 当前响应结构配置信息
     public func getConfigInfo() -> [String: Any] {
         return [
             "codeKey": codeKey,
@@ -56,51 +65,61 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
     }
 }
 
-
 // MARK: - 可继承、线程安全的默认实现
-/**
- 默认 Token 管理器，线程安全，支持手动和自动刷新。
- */
+
+/// 默认 Token 管理器，线程安全，支持手动和自动刷新。
+///
+/// 通过 actor 保证并发安全，可自定义 token 刷新策略。
 open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
     private let storage = TokenStorageActor()
-    
+
+    /// 初始化，可指定初始 token
+    /// - Parameter token: 初始 token
     public init(token: String? = nil) {
         if let token = token {
             Task { await storage.set(token) }
         }
     }
-    
+
     /// 获取当前 Token
+    /// - Returns: 当前 Token，若无则为 nil
     open func getToken() async -> String? {
         await storage.get()
     }
-    
+
     /// 设置新的 Token
+    /// - Parameter newToken: 新 Token
     open func setToken(_ newToken: String) async {
         await storage.set(newToken)
     }
-    
+
     /// 刷新 Token（需子类实现）
+    /// - Returns: 新 Token，默认 nil
     open func refreshToken() async -> String? {
         nil
     }
 }
 
-
-
 // MARK: - 默认拦截器(允许继承)
-/**
- 默认实现，支持 token 注入、业务异常处理、结构化错误输出，支持响应结构配置定制。
- */
+
+/// 默认实现，支持 token 注入、业务异常处理、结构化错误输出，支持响应结构配置定制。
+///
+/// 可用于自定义拦截链路、业务状态码识别、自动注入 token、错误封装等。
 open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, @unchecked Sendable {
+
+    /// 响应结构配置
     public let responseConfig: ResponseStructureConfig
-    
+
     /// 初始化，支持自定义响应结构
+    /// - Parameter responseConfig: 指定响应结构配置
     public init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
         self.responseConfig = responseConfig
     }
-    
-    /// 向后兼容老接口
+
+    /// 向后兼容老接口的便捷初始化
+    /// - Parameters:
+    ///   - successCode: 成功状态码
+    ///   - successDataKey: 数据字段名
     public convenience init(successCode: Int = 200, successDataKey: String = "data") {
         self.init(responseConfig: DefaultResponseStructure(
             codeKey: "code",
@@ -109,8 +128,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             successCode: successCode
         ))
     }
-    
+
     /// 请求拦截，自动注入 Bearer Token
+    /// - Returns: 注入 token 后的新请求
     open func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest {
         guard let token = await tokenManager.getToken() else {
             return urlRequest
@@ -125,8 +145,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return modifiedRequest
     }
-    
+
     /// 响应拦截，只返回业务数据 data
+    /// - Returns: 业务数据或错误
     open func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
         if let error = response.error {
             return .failure(handleAFError(error))
@@ -143,8 +164,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return processSpecificResponseData(data: data, response: httpResponse)
     }
-    
+
     /// 响应拦截，返回完整响应体
+    /// - Returns: 完整响应体或错误
     open func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
         if let error = response.error {
             return .failure(handleAFError(error))
@@ -161,20 +183,21 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return processCompleteResponseData(data: data, response: httpResponse)
     }
-    
+
     /// 判断响应是否成功，可重写
+    /// - Returns: 响应是否业务成功
     open func isResponseSuccess(json: JSON) -> Bool {
         responseConfig.isSuccess(json: json)
     }
-    
-    /// 从JSON中提取业务数据，可重写
+
+    /// 从 JSON 中提取业务数据，可重写
+    /// - Returns: 提取的数据或错误
     open func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
         return JSON.extractDataFromJSON(responseConfig.extractJSON(from: json), originalData: data)
     }
-    
-    
-    
+
     /// 处理自定义业务错误，可重写
+    /// - Returns: 错误结果
     open func handleCustomError(
         code: Int,
         jsonData: Data,
@@ -188,8 +211,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             isCompleteResponse: isCompleteResponse
         )
     }
-    
+
     /// 获取拦截器配置信息
+    /// - Returns: 配置信息字典
     public func getInterceptorConfig() -> [String: Any] {
         var config: [String: Any] = [
             "interceptorType": String(describing: type(of: self))
@@ -207,15 +231,16 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return config
     }
-    
-    // MARK: - Private Implementation Methods
+
+    // MARK: - 私有实现方法
+
     /// 完整响应场景处理
+    /// - Returns: 处理结果
     private func processCompleteResponseData(
         data: Data,
         response: HTTPURLResponse
     ) -> Result<Data, Error> {
         let statusCode = response.statusCode
-        // HTTP 状态码处理
         if let httpError = handleHTTPStatusCode(statusCode) {
             return .failure(httpError)
         }
@@ -236,8 +261,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             return .failure(handleJSONError(error, statusCode: statusCode, originalData: data))
         }
     }
-    
-    /// 指定数据响应处理
+
+    /// 指定业务数据响应处理
+    /// - Returns: 处理结果
     private func processSpecificResponseData(
         data: Data,
         response: HTTPURLResponse
@@ -263,8 +289,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             return .failure(handleJSONError(error, statusCode: statusCode, originalData: data))
         }
     }
-    
+
     /// 业务错误组装
+    /// - Returns: 错误结果
     private func processErrorResponseData(
         code: Int,
         jsonData: Data,
@@ -289,9 +316,11 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             userInfo: userInfo
         ))
     }
-    
+
     // MARK: - Error Handling
+
     /// AFError 统一封装
+    /// - Returns: NSError
     private func handleAFError(_ error: AFError) -> Error {
         var userInfo: [String: Any] = [
             "interceptorConfig": getInterceptorConfig()
@@ -320,8 +349,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             return NSError(domain: "NetworkError", code: -1000, userInfo: userInfo)
         }
     }
-    
+
     /// URLError 单独处理
+    /// - Returns: NSError
     private func handleURLError(_ error: URLError) -> Error {
         let (message, code): (String, Int) = {
             switch error.code {
@@ -340,8 +370,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         ]
         return NSError(domain: "URLError", code: code, userInfo: userInfo)
     }
-    
+
     /// HTTP 状态码错误处理
+    /// - Returns: NSError 或 nil
     private func handleHTTPStatusCode(_ statusCode: Int) -> Error? {
         guard statusCode < 200 || statusCode >= 300 else { return nil }
         let (message, domain): (String, String) = {
@@ -361,9 +392,11 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         ]
         return NSError(domain: domain, code: statusCode, userInfo: userInfo)
     }
-    
+
     // MARK: - Utilities
+
     /// 构造 NSError
+    /// - Returns: NSError
     private func makeError(
         domain: String,
         code: Int,
@@ -382,8 +415,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return NSError(domain: domain, code: code, userInfo: userInfo)
     }
-    
+
     /// JSON 解析错误加强
+    /// - Returns: NSError
     private func handleJSONError(_ error: Error, statusCode: Int, originalData: Data? = nil) -> Error {
         var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: "JSON解析失败: \(error.localizedDescription)",
@@ -400,16 +434,15 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 }
 
-
-
 // MARK: - Alamofire 适配器实现
-/**
- Alamofire RequestInterceptor 适配器，自动注入 token 并处理 401 自动刷新。
- */
+
+/// InterceptorAdapter
+///
+/// Alamofire RequestInterceptor 适配器，自动注入 token 并处理 401 自动刷新。
 class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol
-    
+
     /// 初始化适配器
     /// - Parameters:
     ///   - interceptor: 拦截器
@@ -417,10 +450,10 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol? = nil) {
         self.interceptor = interceptor
         self.tokenManager = tokenManager ?? DefaultTokenManager()
-
     }
-    
+
     /// 请求适配，自动注入 token
+    /// - Returns: 适配后的 URLRequest
     func adapt(_ urlRequest: URLRequest, for session: Session, completion: @escaping (Result<URLRequest, Error>) -> Void) {
         Task {
             if let modifiedRequest = await interceptor?.interceptRequest(urlRequest, tokenManager: tokenManager) {
@@ -430,8 +463,9 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
             }
         }
     }
-    
+
     /// 401 自动重试刷新 token
+    /// - Returns: RetryResult
     func retry(_ request: Request, for session: Session, dueTo error: Error, completion: @escaping (RetryResult) -> Void) {
         Task {
             if let afError = error as? AFError, afError.responseCode == 401 {
