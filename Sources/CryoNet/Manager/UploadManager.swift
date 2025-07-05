@@ -562,7 +562,7 @@ public actor UploadManager<Model: JSONParseable> {
                 }
             }
         }
-        if !completed {
+        if !completed && task.state != .cancelled {
             task.state = .failed
         }
         tasks[id] = task
