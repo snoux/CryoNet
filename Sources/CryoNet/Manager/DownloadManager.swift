@@ -79,12 +79,23 @@ public protocol DownloadManagerDelegate: AnyObject {
     func downloadDidUpdate(task: DownloadTask)
     /// 所有未完成任务更新时回调
     ///
-    /// - Parameter tasks: 当前所有未完成任务
+    /// - Parameter tasks: 当前所有未完成任务(非 completed/cancelled)
     func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTask])
     /// 已完成任务更新时回调
     ///
     /// - Parameter tasks: 当前所有已完成任务
     func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTask])
+    
+    /// 已失败任务更新时回调
+    ///
+    /// - Parameter tasks: 当前所有已失败任务
+    func downloadManagerDidUpdateFailureTasks(_ tasks: [DownloadTask])
+    
+    /// 已取消任务更新时回调
+    ///
+    /// - Parameter tasks: 当前所有已取消任务
+    func downloadManagerDidUpdateCancelTasks(_ tasks: [DownloadTask])
+    
     /// 整体进度或批量状态更新时回调
     ///
     /// - Parameters:
@@ -97,9 +108,11 @@ public extension DownloadManagerDelegate {
     func downloadManagerDidUpdateActiveTasks(_ tasks: [DownloadTask]) {}
     func downloadManagerDidUpdateCompletedTasks(_ tasks: [DownloadTask]) {}
     func downloadManagerDidUpdateProgress(overallProgress: Double, batchState: DownloadBatchState) {}
+    func downloadManagerDidUpdateFailureTasks(_ tasks: [DownloadTask]){}
+    func downloadManagerDidUpdateCancelTasks(_ tasks: [DownloadTask]){}
 }
 
-// MARK: - 下载管理器
+// MARK: - 批量/单任务下载管理器
 /// 下载管理器，支持批量/单个下载、并发控制、进度与状态推送，支持额外参数与自定义header。
 ///
 /// 支持最大并发数设置，自动排队。
@@ -142,6 +155,20 @@ public actor DownloadManager {
     private var interceptorAdapter: RequestInterceptor {
         InterceptorAdapter(interceptor: interceptor, tokenManager: tokenManager)
     }
+    
+    // MARK: - 闭包回调属性
+    /// 单任务状态或进度更新回调
+    private var onDownloadDidUpdate: ((DownloadTask) -> Void)?
+    /// 活跃任务列表更新回调
+    private var onActiveTasksUpdate: (([DownloadTask]) -> Void)?
+    /// 已完成任务列表更新回调
+    private var onCompletedTasksUpdate: (([DownloadTask]) -> Void)?
+    /// 总体进度与状态更新回调
+    private var onProgressUpdate: ((Double, DownloadBatchState) -> Void)?
+    /// 已失败任务列表更新回调
+    private var onFailedTasksUpdate: (([DownloadTask]) -> Void)?
+    /// 已取消任务列表更新回调
+    private var onCancelTasksUpdate: (([DownloadTask]) -> Void)?
     
     /// 创建下载管理器
     ///
@@ -500,7 +527,6 @@ public actor DownloadManager {
     }
     
     // MARK: - 私有：任务调度与下载
-    
     /// 将任务加入队列或立即启动。参数/headers会应用到实际请求。
     private func enqueueOrStartTask(id: UUID) {
         guard var task = tasks[id] else { return }
@@ -615,7 +641,6 @@ public actor DownloadManager {
         notifySingleTaskUpdate(currentTask)
     }
     
-    
     /// 推送单任务更新事件
     private func notifySingleTaskUpdate(_ task: DownloadTask) {
         for delegate in delegates.allObjects {
@@ -623,18 +648,38 @@ public actor DownloadManager {
                 (delegate as? DownloadManagerDelegate)?.downloadDidUpdate(task: task)
             }
         }
+        if let handler = onDownloadDidUpdate {
+            Task { await MainActor.run { handler(task) } }
+        }
     }
     
     // MARK: - 事件派发
     private func notifyTaskListUpdate() {
         let all = allTaskInfos()
-        let active = all.filter { $0.state != .completed && $0.state != .cancelled }
-        let completed = all.filter { $0.state == .completed }
+        let active = activeTasks()
+        let completed = completedTasks()
+        let failedTasks = failedTasks()
+        let cancelTasks = cancelledTasks()
+
         for delegate in delegates.allObjects {
             Task { @MainActor in
                 (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateActiveTasks(active)
                 (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateCompletedTasks(completed)
+                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateCancelTasks(cancelTasks)
+                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateFailureTasks(failedTasks)
             }
+        }
+        if let handler = onActiveTasksUpdate {
+            Task { await MainActor.run { handler(active) } }
+        }
+        if let handler = onCompletedTasksUpdate {
+            Task { await MainActor.run { handler(completed) } }
+        }
+        if let handler = onFailedTasksUpdate {
+            Task { await MainActor.run { handler(failedTasks) } }
+        }
+        if let handler = onCancelTasksUpdate {
+            Task { await MainActor.run { handler(cancelTasks) } }
         }
     }
     private func notifyProgressAndBatchState() {
@@ -644,6 +689,9 @@ public actor DownloadManager {
             Task { @MainActor in
                 (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateProgress(overallProgress: progress, batchState: batch)
             }
+        }
+        if let handler = onProgressUpdate {
+            Task { await MainActor.run { handler(progress,batch) } }
         }
         if isOverallCompleted(), !overallCompletedCalled {
             overallCompletedCalled = true
@@ -660,7 +708,6 @@ public actor DownloadManager {
     }
     
     // MARK: - 状态/查询接口
-    
     /// 获取所有任务信息
     public func allTaskInfos() -> [DownloadTask] {
         return Array(tasks.values)
@@ -672,6 +719,23 @@ public actor DownloadManager {
     /// 获取单个任务信息
     public func getTaskInfo(id: UUID) -> DownloadTask? {
         return tasks[id]
+    }
+    
+    /// 获取所有已完成任务
+    public func completedTasks() -> [DownloadTask] {
+        tasks.values.filter { $0.state == .completed }
+    }
+    /// 获取所有未完成任务（非 completed/cancelled）
+    public func activeTasks() -> [DownloadTask] {
+        tasks.values.filter { $0.state != .completed && $0.state != .cancelled }
+    }
+    /// 获取所有已失败任务
+    public func failedTasks() -> [DownloadTask] {
+        tasks.values.filter { $0.state == .failed }
+    }
+    /// 获取所有已取消任务
+    public func cancelledTasks() -> [DownloadTask] {
+        tasks.values.filter { $0.state == .cancelled }
     }
     
     // MARK: - 进度/批量状态计算
@@ -738,4 +802,60 @@ public actor DownloadManager {
         } completionHandler: { _, _ in }
     }
 #endif
+
+    // MARK: - 链式闭包回调注册
+    /// 单任务状态或进度更新回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为最新的任务信息
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onDownloadDidUpdate(_ handler: @escaping (DownloadTask) -> Void) -> Self {
+        self.onDownloadDidUpdate = handler
+        return self
+    }
+    /// 所有未完成任务更新时回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为当前所有未完成任务
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onActiveTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+        self.onActiveTasksUpdate = handler
+        return self
+    }
+    /// 已完成任务更新时回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为当前所有已完成任务
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onCompletedTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+        self.onCompletedTasksUpdate = handler
+        return self
+    }
+    /// 所有已取消任务更新时回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为当前所有已取消任务
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onCancelTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+        self.onCancelTasksUpdate = handler
+        return self
+    }
+    /// 所有已失败任务更新时回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为当前所有已失败任务
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onFailedTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+        self.onFailedTasksUpdate = handler
+        return self
+    }
+    /// 整体进度或批量状态更新时回调
+    ///
+    /// - Parameter handler: 回调闭包，参数为总体进度(0.0-1.0)和批量下载状态
+    /// - Returns: Self，便于链式调用
+    @discardableResult
+    public func onProgressUpdate(_ handler: @escaping (Double, DownloadBatchState) -> Void) -> Self {
+        self.onProgressUpdate = handler
+        return self
+    }
 }
