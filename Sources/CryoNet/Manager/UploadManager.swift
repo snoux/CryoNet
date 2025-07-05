@@ -428,6 +428,9 @@ public actor UploadManager<Model: JSONParseable> {
     }
     
     // MARK: - 单任务控制（暂停、恢复、取消、删除）
+    
+    /// 暂停任务
+    /// - Parameter id: 任务ID
     public func pauseTask(id: UUID) {
         if var task = tasks[id], task.state == .uploading {
             task.response?.suspend()
@@ -438,7 +441,8 @@ public actor UploadManager<Model: JSONParseable> {
             notifySingleTaskUpdate(task: task)
         }
     }
-    
+    /// 启动任务
+    /// - Parameter id: 任务ID
     public func resumeTask(id: UUID) {
         if var task = tasks[id], task.state == .paused {
             task.response?.resume()
@@ -452,6 +456,11 @@ public actor UploadManager<Model: JSONParseable> {
         }
     }
     
+    /// 取消任务(可恢复)
+    /// 取消的任务不会出现在未完成任务组中
+    /// 可通过`cancelledTasks`方法获取已取消的任务组
+    /// 通过`resumeTask`、`batchResume`将已取消任务重新加入队列并开始任务
+    /// - Parameter id: 任务ID
     public func cancelTask(id: UUID) {
         if var task = tasks[id], [.uploading, .paused, .idle].contains(task.state) {
             task.response?.cancel()
@@ -463,6 +472,8 @@ public actor UploadManager<Model: JSONParseable> {
         }
     }
     
+    /// 删除任务(无法恢复)
+    /// - Parameter id: 任务ID
     public func deleteTask(id: UUID) {
         if let task = tasks[id], [.uploading, .paused, .idle].contains(task.state) {
             task.response?.cancel()
@@ -476,50 +487,75 @@ public actor UploadManager<Model: JSONParseable> {
     }
     
     // MARK: - 批量任务控制
+    
+    /// 批量暂停
+    /// - Parameter ids: 任务ID组
     public func batchPause(ids: [UUID]) {
         for id in ids { pauseTask(id: id) }
     }
+    
+    /// 批量开始
+    /// - Parameter ids: 任务ID组
     public func batchResume(ids: [UUID]) {
         for id in ids { resumeTask(id: id) }
     }
+    /// 批量取消
+    /// - Parameter ids: 任务ID组
     public func batchCancel(ids: [UUID]) {
         for id in ids { cancelTask(id: id) }
     }
+    /// 批量删除
+    /// - Parameter ids: 任务ID组
     public func batchDelete(ids: [UUID]) {
         for id in ids { deleteTask(id: id) }
     }
+    
+    /// 取消全部任务(可恢复)
+    /// 取消的任务不会出现在未完成任务组中
+    /// 可通过`cancelledTasks`方法获取已取消的任务组
+    /// 通过`resumeTask`、`batchResume`将已取消任务重新加入队列并开始任务
+    /// - Parameter id: 任务ID
     public func cancelAllTasks() {
         let ids = allTaskIDs()
         for id in ids { cancelTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
+    
+    /// 暂停全部任务
     public func stopAllTasks() {
         let ids = allTaskIDs()
         batchPause(ids: ids)
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
+    /// 删除全部任务
     public func deleteAllTasks() {
         let ids = allTaskIDs()
         for id in ids { deleteTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
+    
+    /// 开启全部任务
     public func startAllTasks() {
         let ids = allTaskIDs()
         for id in ids { startTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
-    /// 取消所有已失败任务
+    /// 取消所有已失败任务(可恢复)
+    /// 取消的任务不会出现在未完成任务组中
+    /// 可通过`cancelledTasks`方法获取已取消的任务组
+    /// 通过`resumeTask`、`batchResume`将已取消任务重新加入队列并开始任务
+    /// - Parameter id: 任务ID
     public func cancelAllFailedTasks() {
         let ids = failedTasks().map { $0.id }
         for id in ids { cancelTask(id: id) }
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
     }
-    /// 删除所有已失败任务
+    /// 删除所有已失败任务(不可恢复,彻底删除任务)
     public func deleteAllFailedTasks() {
         let ids = failedTasks().map { $0.id }
         for id in ids { deleteTask(id: id) }
@@ -653,7 +689,7 @@ public actor UploadManager<Model: JSONParseable> {
     public func allTasks() -> [UploadTask<Model>] {
         Array(tasks.values)
     }
-    /// 获取所有未完成（进行中/待处理/失败/暂停等）任务
+    /// 获取所有未完成（进行中/待处理/失败/暂停）任务
     ///
     /// - Returns: 未完成任务列表
     public func activeTasks() -> [UploadTask<Model>] {
