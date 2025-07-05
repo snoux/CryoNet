@@ -615,27 +615,34 @@ public actor DownloadManager {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         defer { Task { await self.checkAndStartNext() } }
-        
-        let fileExists = FileManager.default.fileExists(atPath: currentTask.destination.path)
-        let httpCode = response.response?.statusCode ?? 0
-        let noError = response.error == nil
-        
-        // 判断下载是否真正成功：无错误、HTTP状态码为200～299、文件已写入本地
-        if noError, (200...299).contains(httpCode), fileExists {
-            currentTask.progress = 1.0
-            currentTask.state = .completed
-            tasks[id] = currentTask
-            if currentTask.saveToAlbum {
-#if os(iOS) || os(watchOS) || os(macOS)
-                if #available(iOS 14, watchOS 7, macOS 11, *) {
-                    await Self.saveToAlbumIfNeeded(fileURL: currentTask.destination)
-                }
-#endif
-            }
+
+        // 优先判断是否为取消（Alamofire/URLSession cancel）
+        if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
+            currentTask.state = .cancelled
+        } else if let nsError = response.error as NSError?, nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            currentTask.state = .cancelled
         } else {
-            currentTask.state = .failed
-            tasks[id] = currentTask
+            let fileExists = FileManager.default.fileExists(atPath: currentTask.destination.path)
+            let httpCode = response.response?.statusCode ?? 0
+            let noError = response.error == nil
+
+            // 判断下载是否真正成功：无错误、HTTP状态码为200～299、文件已写入本地
+            if noError, (200...299).contains(httpCode), fileExists {
+                currentTask.progress = 1.0
+                currentTask.state = .completed
+                tasks[id] = currentTask
+    #if os(iOS) || os(watchOS) || os(macOS)
+                if currentTask.saveToAlbum {
+                    if #available(iOS 14, watchOS 7, macOS 11, *) {
+                        await Self.saveToAlbumIfNeeded(fileURL: currentTask.destination)
+                    }
+                }
+    #endif
+            } else {
+                currentTask.state = .failed
+            }
         }
+        tasks[id] = currentTask
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
         notifySingleTaskUpdate(currentTask)

@@ -540,7 +540,12 @@ public actor UploadManager<Model: JSONParseable> {
         guard var task = tasks[id] else { return }
         currentUploadingCount = max(0, currentUploadingCount - 1)
         var completed = false
-        if let data = response.data, let json = try? JSON(data: data) {
+        // 新增：处理取消
+        if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
+            task.state = .cancelled
+        } else if let error = response.error as NSError?, error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled {
+            task.state = .cancelled
+        } else if let data = response.data, let json = try? JSON(data: data) {
             if self.interceptor.isResponseSuccess(json: json) {
                 task.progress = 1.0
                 task.state = .completed
