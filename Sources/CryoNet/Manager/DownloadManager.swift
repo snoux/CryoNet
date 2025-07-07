@@ -316,7 +316,7 @@ public actor DownloadManager {
             headers: headers
         )
         enqueueOrStartTask(id: id)
-        await updateBatchStateIfNeeded()
+        updateBatchStateIfNeeded()
         return id
     }
     
@@ -445,7 +445,7 @@ public actor DownloadManager {
     /// - Parameter count: 新的并发数，最小1
     public func setMaxConcurrentDownloads(_ count: Int) {
         self.maxConcurrentDownloads = max(1, count)
-        Task { await self.checkAndStartNext() }
+        Task { self.checkAndStartNext() }
     }
     
     // MARK: - 单任务控制
@@ -472,7 +472,7 @@ public actor DownloadManager {
         tasks[id] = task
         notifyTaskListUpdate()
         notifyProgressAndBatchState()
-        Task { await self.checkAndStartNext() }
+        Task { self.checkAndStartNext() }
     }
     public func resumeTask(id: UUID) {
         guard let task = tasks[id] else {return}
@@ -503,7 +503,7 @@ public actor DownloadManager {
             if shouldDeleteFile, FileManager.default.fileExists(atPath: task.destination.path) {
                 try? FileManager.default.removeItem(at: task.destination)
             }
-            Task { await self.checkAndStartNext() }
+            Task { self.checkAndStartNext() }
         } else if task.state == .completed || task.state == .failed || task.state == .paused || task.state == .idle {
             if shouldDeleteFile, FileManager.default.fileExists(atPath: task.destination.path) {
                 try? FileManager.default.removeItem(at: task.destination)
@@ -614,7 +614,7 @@ public actor DownloadManager {
     private func onComplete(id: UUID, response: AFDownloadResponse<Data>) async {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
-        defer { Task { await self.checkAndStartNext() } }
+        defer { Task { self.checkAndStartNext() } }
 
         // 优先判断是否为取消（Alamofire/URLSession cancel）
         if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
@@ -662,7 +662,7 @@ public actor DownloadManager {
     
     // MARK: - 事件派发
     private func notifyTaskListUpdate() {
-        let all = allTaskInfos()
+//        _ = allTaskInfos()
         let active = activeTasks()
         let completed = completedTasks()
         let failedTasks = failedTasks()

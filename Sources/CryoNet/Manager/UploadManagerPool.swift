@@ -1,22 +1,10 @@
 import Foundation
 import Alamofire
 
-// 类型擦除协议
-public protocol AnyUploadManager: AnyObject {
-    func deleteAllTasks() async
-}
-
-// 泛型上传管理器遵循类型擦除协议
-extension UploadManager: AnyUploadManager {
-    public func deleteAllTasks() async {
-        await self.deleteAllTasks()
-    }
-}
-
 // 多实例池，支持泛型队列
 public actor UploadManagerPool {
     public static let shared = UploadManagerPool()
-    private var managers: [String: AnyUploadManager] = [:]
+    private var managers: [String: AnyObject] = [:]
 
     /// 获取或创建指定 identifier 的泛型 UploadManager
     /// - Parameters:
@@ -56,28 +44,13 @@ public actor UploadManagerPool {
         managers[identifier] as? UploadManager<Model>
     }
 
-    /// 所有已创建的 UploadManager（类型擦除）
-    public func allManagers() -> [AnyUploadManager] {
-        Array(managers.values)
-    }
-
     /// 移除指定 identifier 的 UploadManager
-    public func removeManager(for identifier: String) {
+    public func removeManager<Model: JSONParseable>(for identifier: String, modelType: Model.Type) {
         Task{
-            if let manager = managers[identifier] {
+            if let manager = managers[identifier] as? UploadManager<Model> {
                 await manager.deleteAllTasks()
             }
             managers[identifier] = nil
-        }
-    }
-
-    /// 清空全部
-    public func removeAll() {
-        Task{
-            for manager in allManagers() {
-                await manager.deleteAllTasks()
-            }
-            managers.removeAll()
         }
     }
 }
