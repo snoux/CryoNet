@@ -777,19 +777,17 @@ public actor DownloadManager {
     
     private static func saveToAlbumIfNeeded(fileURL: URL) async {
 #if os(iOS) || os(watchOS) || os(macOS)
-        let fileExtension = fileURL.pathExtension.lowercased()
-        let isImage = ["jpg", "jpeg", "png", "gif", "heic"].contains(fileExtension)
-        let isVideo = ["mp4", "mov", "m4v"].contains(fileExtension)
-        guard isImage || isVideo else { return }
+        let category = mimeTypeForURL(fileURL).category
+        guard category == .image || category == .video else { return }
         if #available(iOS 14, watchOS 7, macOS 11, *) {
             let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
             switch status {
             case .authorized:
-                performSaveToAlbum(fileURL: fileURL, isVideo: isVideo)
+                performSaveToAlbum(fileURL: fileURL, isVideo: category == .video)
             case .notDetermined:
                 PHPhotoLibrary.requestAuthorization(for: .addOnly) { newStatus in
                     if newStatus == .authorized {
-                        performSaveToAlbum(fileURL: fileURL, isVideo: isVideo)
+                        performSaveToAlbum(fileURL: fileURL, isVideo: category == .video)
                     }
                 }
             default:
