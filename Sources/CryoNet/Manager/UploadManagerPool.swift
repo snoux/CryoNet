@@ -14,6 +14,7 @@ public actor UploadManagerPool {
     ///   - headers: HTTP头部
     ///   - maxConcurrentUploads: 最大并发上传数
     ///   - modelType: 必须传，保证泛型类型安全
+    ///  - tokenManager: 默认DefaultTokenManager()
     /// - Returns: 泛型 UploadManager<Model>
     public func manager<Model: JSONParseable>(
         for identifier: String,

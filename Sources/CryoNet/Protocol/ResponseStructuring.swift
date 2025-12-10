@@ -33,4 +33,19 @@ public protocol ResponseStructureConfig: Sendable {
     
     /// 从JSON中提取数据
     func extractJSON(from json: JSON) -> JSON
+    
+    /// 从 JSON 提取数据并转换为 Data（可重写）
+    /// - Parameters:
+    ///   - json: 原始 JSON 对象
+    ///   - originalData: 原始响应数据
+    /// - Returns: 提取的数据或错误
+    func extractData(from json: JSON, originalData: Data) -> Result<Data, Error>
+}
+
+// MARK: - 协议扩展：提供默认实现
+public extension ResponseStructureConfig {
+    /// 默认实现：使用 extractJSON 提取 JSON，然后转换为 Data
+    func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
+        return JSON.extractDataFromJSON(extractJSON(from: json), originalData: originalData)
+    }
 }

@@ -193,7 +193,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// 从 JSON 中提取业务数据，可重写
     /// - Returns: 提取的数据或错误
     open func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
-        return JSON.extractDataFromJSON(responseConfig.extractJSON(from: json), originalData: data)
+        // 直接调用协议方法，支持所有实现 ResponseStructureConfig 的类型
+        // 如果用户重写了 extractData，会自动调用重写的方法
+        return responseConfig.extractData(from: json, originalData: data)
     }
 
     /// 处理自定义业务错误，可重写
