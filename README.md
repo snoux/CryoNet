@@ -4,9 +4,7 @@ CryoNet 是一个专为 iOS/macOS 项目设计的网络请求框架，它在 Ala
 
 ---
 
-## 项目状态与安装指南
-
-**CryoNet 目前处于积极开发与测试阶段。** 虽然 API 可能会有微小调整，但其核心用法和设计理念将保持稳定。欢迎关注、试用，并期待您的宝贵建议和问题反馈！
+## 安装指南
 
 ### 安装方式：Swift Package Manager (SPM)
 
@@ -18,10 +16,7 @@ CryoNet 仅支持通过 Swift Package Manager 进行安装，步骤如下：
     ```
     https://github.com/snoux/CryoNet.git
     ```
-
-3.  选择 **main** 分支作为依赖源进行集成。**重要提示：** 鉴于项目仍处于开发阶段，请始终选择 `main` 分支以获取最新功能和修复。未来正式发布时，将提供稳定的版本标签。
-
-4.  在您的项目 `target` 中导入 CryoNet 模块：
+3.  在您的项目 `target` 中导入 CryoNet 模块：
 
     ```swift
     import CryoNet
