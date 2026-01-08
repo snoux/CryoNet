@@ -31,9 +31,9 @@ import Alamofire
 ///
 /// - Note:
 ///   - `encodingClosure` 闭包必须是 `@Sendable` 的，以确保在并发环境中安全执行。
-///   - 通常情况下，您会通过 ``ParameterEncoder/custom(_:)`` 枚举成员来使用此自定义编码。
+///   - 通常情况下，您会通过 ``CryoParameterEncoder/custom(_:)`` 枚举成员来使用此自定义编码。
 ///
-/// - SeeAlso: ``ParameterEncoder``, ``ParameterEncoder/custom(_:)``
+/// - SeeAlso: ``CryoParameterEncoder``, ``CryoParameterEncoder/custom(_:)``
 public struct CustomParameterEncoding: ParameterEncoding {
     /// 编码闭包，定义了如何将 `URLRequestConvertible` 和 `Parameters` 转换为 `URLRequest`。
     private let encodingClosure: @Sendable (any URLRequestConvertible, Parameters?) throws -> URLRequest
@@ -77,20 +77,20 @@ public struct CustomParameterEncoding: ParameterEncoding {
     }
 }
 
-/// `ParameterEncoder` 枚举封装了 Alamofire 提供的多种参数编码方式，并支持自定义编码。
+/// `CryoParameterEncoder` 枚举封装了 Alamofire 提供的多种参数编码方式，并支持自定义编码。
 ///
 /// 它提供了一个便捷的方式来选择和切换请求的参数编码策略，包括 URL 编码、JSON 编码以及完全自定义的编码。
 ///
 /// ### 使用示例
 /// ```swift
 /// // 使用 URL 默认编码
-/// let urlEncoder = ParameterEncoder.urlDefault
+/// let urlEncoder = CryoParameterEncoder.urlDefault
 ///
 /// // 使用 JSON 美化格式编码
-/// let jsonPrettyEncoder = ParameterEncoder.jsonPrettyPrinted
+/// let jsonPrettyEncoder = CryoParameterEncoder.jsonPrettyPrinted
 ///
 /// // 使用自定义编码
-/// let customEncoder = ParameterEncoder.custom { urlRequest, parameters in
+/// let customEncoder = CryoParameterEncoder.custom { urlRequest, parameters in
 ///     var request = try urlRequest.asURLRequest()
 ///     // ... 自定义编码逻辑 ...
 ///     return request
@@ -101,10 +101,10 @@ public struct CustomParameterEncoding: ParameterEncoding {
 /// ```
 ///
 /// - SeeAlso: ``CustomParameterEncoding``, ``RequestModel``
-public enum ParameterEncoder {
+public enum CryoParameterEncoder {
     /// 默认 URL 编码方式，参数通常以 `key=value&key2=value2` 的形式附加到 URL 上。
     case urlDefault
-    /// 查询字符串 URL 编码方式，强制将所有参数编码为 URL 查询字符串。
+    /// 查询字符串 URL 编码方式，强制将所有参数编码为 URL 查询字符串（不考虑请求方式，始终拼接到 URL）。
     case urlQueryString
     /// HTTP Body 编码方式，参数将编码到 HTTP 请求体中。
     case urlHttpBody
@@ -123,7 +123,7 @@ public enum ParameterEncoder {
     ///
     /// ### 使用示例
     /// ```swift
-    /// let encodingInstance = ParameterEncoder.jsonDefault.getEncoding()
+    /// let encodingInstance = CryoParameterEncoder.jsonDefault.getEncoding()
     /// // encodingInstance 现在是 Alamofire.JSONEncoding.default
     /// ```
     ///

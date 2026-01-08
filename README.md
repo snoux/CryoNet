@@ -111,7 +111,73 @@ CryoNet 提供了强大的拦截器机制，支持自定义和继承 `RequestInt
 
 **拦截器配置与使用示例：**
 
-以下代码展示了如何自定义响应结构和拦截器，并将其应用于全局配置或单个请求：
+CryoNet 提供了两种配置拦截器的方式：**闭包式便捷配置**（推荐，无需创建类）和**类继承方式**（适合复杂场景）。
+
+**方式1：闭包式便捷配置（推荐）**
+
+无需创建类，直接使用闭包配置，简化配置过程：
+
+```swift
+// 全局配置 CryoNet 实例，使用闭包式配置拦截器
+let cryoNet = CryoNet() { config in
+    config.basicURL = "https://www.cfdport.com:7013/shugangDriver"
+    config.tokenManager = DefaultTokenManager()
+    
+    // 便捷方式：直接使用闭包配置（最简单）
+    config.interceptor = DefaultInterceptor(
+        codeKey: "code",
+        messageKey: "msg",
+        dataKey: "",  // 空字符串表示返回完整数据
+        successCode: 0
+    )
+    
+    // 或者自定义数据提取和成功判断逻辑
+    config.interceptor = DefaultInterceptor(
+        codeKey: "code",
+        messageKey: "msg",
+        dataKey: "",
+        successCode: 0,
+        extractData: { json, originalData in
+            // 自定义数据提取逻辑：返回完整数据
+            return .success(originalData)
+        },
+        isSuccess: { json in
+            // 自定义成功判断逻辑
+            return json["code"].intValue == 0
+        }
+    )
+}
+```
+
+**方式2：使用 ResponseConfig 结构体（可复用）**
+
+对于需要复用的配置，可以使用 `ResponseConfig` 结构体：
+
+```swift
+// 创建可复用的响应配置
+let responseConfig = ResponseConfig(
+    codeKey: "code",
+    messageKey: "msg",
+    dataKey: "",
+    successCode: 0,
+    extractData: { json, originalData in
+        return .success(originalData)
+    },
+    isSuccess: { json in
+        json["code"].intValue == 0
+    }
+)
+
+let cryoNet = CryoNet() { config in
+    config.basicURL = "https://www.cfdport.com:7013/shugangDriver"
+    config.interceptor = DefaultInterceptor(responseConfig: responseConfig)
+    config.tokenManager = DefaultTokenManager()
+}
+```
+
+**方式3：类继承方式（适合复杂场景）**
+
+如果需要更复杂的自定义逻辑，可以使用类继承方式：
 
 ```swift
 /// 自定义响应结构配置，用于解析深层数据
@@ -135,7 +201,7 @@ final class myResponseConfig: DefaultResponseStructure, @unchecked Sendable {
 }
 
 /// 自定义拦截器
-class MyInterceptor: DefaultInterceptor {
+class MyInterceptor: DefaultInterceptor, @unchecked Sendable {
     init() {
         let responseConfig = myResponseConfig()
         super.init(responseConfig: responseConfig)  /// 为拦截器配置数据结构
@@ -195,7 +261,9 @@ struct NewModel: JSONParseable, Equatable, Identifiable {
     let title: String
     let id = UUID()
     init?(json: JSON) {
-        self.title = json.string("title", defaultValue: "这是一条新闻")
+        // 新语法（推荐）：更简洁
+        self.title = json["title"] ?? "这是一条新闻"
+        // 旧语法（仍然支持）：self.title = json.string("title", defaultValue: "这是一条新闻")
     }
 }
 
@@ -472,6 +540,144 @@ await downloadManager
 
 CryoNet 还支持流式数据请求，包括 JSON、Decodable 模型、Server-Sent Events (SSE) 以及其他自定义数据流。框架能够自动判定内容类型，为实时数据交互提供了便利。
 
+---
+
+---
+
+## 更新日志
+
+### 最新更新
+
+#### 1. 拦截器配置优化：新增闭包式便捷配置方式
+
+为了简化拦截器的配置过程，CryoNet 新增了闭包式便捷配置方式，无需创建类即可完成配置。
+
+**新增功能：**
+- `DefaultInterceptor` 新增便捷初始化方法，支持闭包式配置
+- 新增 `ResponseConfig` 结构体，支持闭包式快速配置
+- 保持向后兼容，原有的类继承方式仍然可用
+
+**使用示例：**
+```swift
+// 新的便捷方式（推荐）
+config.interceptor = DefaultInterceptor(
+    codeKey: "code",
+    messageKey: "msg",
+    dataKey: "",
+    successCode: 0,
+    extractData: { json, originalData in
+        return .success(originalData)
+    },
+    isSuccess: { json in
+        json["code"].intValue == 0
+    }
+)
+```
+
+**优势：**
+- ✅ 无需创建类，代码更简洁
+- ✅ 配置更直观，一目了然
+- ✅ 保持类型安全
+- ✅ 完全向后兼容
+
+#### 2. 参数编码器重命名：`ParameterEncoder` → `CryoParameterEncoder`
+
+为避免与 Alamofire 框架的类型名冲突，将 `ParameterEncoder` 重命名为 `CryoParameterEncoder`。
+
+**影响范围：**
+- 所有使用 `ParameterEncoder` 的地方都需要更新为 `CryoParameterEncoder`
+- `RequestModel` 的 `encoding` 属性类型已更新
+- 枚举值保持不变（如 `.jsonDefault`、`.urlDefault` 等）
+
+**迁移示例：**
+```swift
+// 旧代码（已废弃）
+var encoding: ParameterEncoder = .jsonDefault
+
+// 新代码
+var encoding: CryoParameterEncoder = .jsonDefault
+```
+
+#### 3. SwiftyJSON 模型解析优化：新增类型推断下标访问语法
+
+为了简化 `JSONParseable` 模型的初始化代码，CryoNet 新增了更简洁的类型推断下标访问语法，支持使用 `json["key"] ?? defaultValue` 的方式快速解析 JSON 数据。
+
+**新增功能：**
+- 支持类型推断的下标访问：`json["key"]` 自动推断类型
+- 支持 `??` 操作符设置默认值：`json["key"] ?? "默认值"`
+- 支持嵌套路径访问：`json["user.name"] ?? "未知"`
+- 支持嵌套模型解析：自动解析 `JSONParseable` 类型的嵌套模型
+- 支持嵌套模型数组解析：自动解析 `[JSONParseable]` 类型的数组
+
+**使用示例：**
+
+```swift
+struct NewModel: Codable, JSONParseable, Equatable, Identifiable {
+    let title: String
+    var id = UUID()
+    let details: NewDetailsModel
+    let comments: [CommentModel]
+    
+    init?(json: JSON) {
+        // ✅ 新语法：简单字段（更简洁）
+        self.title = json["title"] ?? "这是一条新闻"
+        
+        // ✅ 新语法：嵌套路径（支持点号分隔）
+        // let userName = json["user.name"] ?? "未知用户"
+        
+        // ✅ 新语法：嵌套模型（需要提供默认模型）
+        let defaultDetails = NewDetailsModel(json: JSON(["title": "默认详情"]))!
+        self.details = json["details"] ?? defaultDetails
+        
+        // ✅ 新语法：嵌套模型数组（自动解析）
+        self.comments = json["comments"] ?? []
+    }
+}
+
+struct NewDetailsModel: Codable, JSONParseable {
+    let title: String
+    var id = UUID()
+    
+    init?(json: JSON) {
+        // ✅ 新语法：简洁明了
+        self.title = json["title"] ?? "这是一条新闻"
+    }
+}
+
+struct CommentModel: Codable, JSONParseable {
+    let title: String
+    var id = UUID()
+    
+    init?(json: JSON) {
+        self.title = json["title"] ?? "默认评论"
+    }
+}
+```
+
+**对比：旧语法 vs 新语法**
+
+```swift
+// 旧语法
+init?(json: JSON) {
+    self.title = json.string("title", defaultValue: "这是一条新闻")
+    let defaultDetails = NewDetailsModel(json: JSON(["title": "默认详情"]))!
+    self.details = json.toModel(NewDetailsModel.self, keyPath: "details") ?? defaultDetails
+    self.comments = json.toModelArray(CommentModel.self, keyPath: "comments")
+}
+
+// 新语法（更简洁）✅
+init?(json: JSON) {
+    self.title = json["title"] ?? "这是一条新闻"
+    let defaultDetails = NewDetailsModel(json: JSON(["title": "默认详情"]))!
+    self.details = json["details"] ?? defaultDetails
+    self.comments = json["comments"] ?? []
+}
+```
+
+**注意事项：**
+- 嵌套模型需要提供默认值实例
+- 数组默认值通常使用空数组 `[]`
+- 对于嵌套模型，也可以继续使用 `json.toModel(_:keyPath:)` 方法（更安全）
 ---
 
 ## 更多资源

@@ -65,6 +65,98 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
     }
 }
 
+// MARK: - 便捷配置结构体
+
+/// `ResponseConfig` 响应结构配置结构体，支持闭包式快速配置，无需创建类。
+///
+/// 通过闭包方式自定义数据提取和成功判断逻辑，简化配置过程。
+///
+/// ### 使用示例
+/// ```swift
+/// let responseConfig = ResponseConfig(
+///     codeKey: "code",
+///     messageKey: "msg",
+///     dataKey: "",
+///     successCode: 0
+/// ) { json, originalData in
+///     return .success(originalData)
+/// } isSuccess: { json in
+///     json["code"].intValue == 0
+/// }
+/// ```
+public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
+    public let codeKey: String
+    public let messageKey: String
+    public let dataKey: String
+    public let successCode: Int
+    
+    /// 自定义数据提取闭包
+    private let extractDataHandler: @Sendable (JSON, Data) -> Result<Data, Error>
+    /// 自定义成功判断闭包
+    private let isSuccessHandler: @Sendable (JSON) -> Bool
+    
+    /// 初始化响应配置
+    /// - Parameters:
+    ///   - codeKey: 状态码字段名
+    ///   - messageKey: 消息字段名
+    ///   - dataKey: 数据字段名
+    ///   - successCode: 成功状态码
+    ///   - extractData: 可选的自定义数据提取闭包，返回提取的数据或错误。如果为 nil 则使用默认逻辑
+    ///   - isSuccess: 可选的自定义成功判断闭包，返回是否成功。如果为 nil 则使用默认逻辑
+    public init(
+        codeKey: String = "code",
+        messageKey: String = "msg",
+        dataKey: String = "data",
+        successCode: Int = 200,
+        extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
+        isSuccess: ((JSON) -> Bool)? = nil
+    ) {
+        self.codeKey = codeKey
+        self.messageKey = messageKey
+        self.dataKey = dataKey
+        self.successCode = successCode
+        
+        // 如果提供了自定义闭包，使用自定义闭包；否则使用默认逻辑
+        if let extractData = extractData {
+            self.extractDataHandler = { @Sendable json, originalData in
+                extractData(json, originalData)
+            }
+        } else {
+            // 默认实现：提取指定字段的 JSON，然后转换为 Data
+            self.extractDataHandler = { @Sendable json, originalData in
+                let extractedJSON = json[dataKey]
+                return JSON.extractDataFromJSON(extractedJSON, originalData: originalData)
+            }
+        }
+        
+        if let isSuccess = isSuccess {
+            self.isSuccessHandler = { @Sendable json in
+                isSuccess(json)
+            }
+        } else {
+            // 默认实现：判断状态码是否等于成功码
+            self.isSuccessHandler = { @Sendable json in
+                json[codeKey].intValue == successCode
+            }
+        }
+    }
+    
+    /// 从 JSON 提取业务数据字段
+    public func extractJSON(from json: JSON) -> JSON {
+        json[dataKey]
+    }
+    
+    /// 判断响应是否成功
+    public func isSuccess(json: JSON) -> Bool {
+        isSuccessHandler(json)
+    }
+    
+    /// 从 JSON 提取数据
+    public func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
+        extractDataHandler(json, originalData)
+    }
+}
+
 // MARK: - 可继承、线程安全的默认实现
 
 /// 默认 Token 管理器，线程安全，支持手动和自动刷新。
@@ -112,7 +204,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
 
     /// 初始化，支持自定义响应结构
     /// - Parameter responseConfig: 指定响应结构配置
-    public init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
+    public nonisolated init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
         self.responseConfig = responseConfig
     }
 
@@ -120,13 +212,72 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// - Parameters:
     ///   - successCode: 成功状态码
     ///   - successDataKey: 数据字段名
-    public convenience init(successCode: Int = 200, successDataKey: String = "data") {
+    public nonisolated convenience init(successCode: Int = 200, successDataKey: String = "data") {
         self.init(responseConfig: DefaultResponseStructure(
             codeKey: "code",
             messageKey: "msg",
             dataKey: successDataKey,
             successCode: successCode
         ))
+    }
+    
+    /// 便捷初始化方法，支持闭包式快速配置（推荐使用）
+    ///
+    /// 无需创建类，直接使用闭包配置响应结构，简化配置过程。
+    ///
+    /// - Parameters:
+    ///   - codeKey: 状态码字段名，默认 "code"
+    ///   - messageKey: 消息字段名，默认 "msg"
+    ///   - dataKey: 数据字段名，默认 "data"，传空字符串表示返回完整数据
+    ///   - successCode: 成功状态码，默认 200
+    ///   - extractData: 可选的自定义数据提取闭包，如果为 nil 则使用默认逻辑
+    ///   - isSuccess: 可选的自定义成功判断闭包，如果为 nil 则使用默认逻辑
+    ///
+    /// ### 使用示例
+    /// ```swift
+    /// // 方式1：使用默认逻辑（最简单）
+    /// let interceptor = DefaultInterceptor(
+    ///     codeKey: "code",
+    ///     messageKey: "msg",
+    ///     dataKey: "data",
+    ///     successCode: 0
+    /// )
+    ///
+    /// // 方式2：自定义数据提取和成功判断
+    /// let interceptor = DefaultInterceptor(
+    ///     codeKey: "code",
+    ///     messageKey: "msg",
+    ///     dataKey: "data",
+    ///     successCode: 0,
+    ///     extractData: { json, originalData in
+    ///         return .success(originalData)
+    ///     },
+    ///     isSuccess: { json in
+    ///         json["code"].intValue == successCode // 告诉拦截器，请求是否成功（根据实际业务情况修改）
+    ///     }
+    /// )
+    /// ```
+    public nonisolated convenience init(
+        codeKey: String = "code",
+        messageKey: String = "msg",
+        dataKey: String = "data",
+        successCode: Int = 200,
+        extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
+        isSuccess: ((JSON) -> Bool)? = nil
+    ) {
+        let config = ResponseConfig(
+            codeKey: codeKey,
+            messageKey: messageKey,
+            dataKey: dataKey,
+            successCode: successCode,
+            extractData: extractData.map { handler in
+                { json, originalData in handler(json, originalData) }
+            },
+            isSuccess: isSuccess.map { handler in
+                { json in handler(json) }
+            }
+        )
+        self.init(responseConfig: config)
     }
 
     /// 请求拦截，自动注入 Bearer Token

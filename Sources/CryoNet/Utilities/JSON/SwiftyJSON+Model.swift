@@ -1,6 +1,142 @@
 import Foundation
 import SwiftyJSON
 
+// MARK: - JSON 值包装器（支持类型推断和默认值）
+
+/// JSON 值包装器，用于支持类型推断的下标访问和默认值设置
+///
+/// 此结构体用于实现 `json["key"] ?? "默认值"` 的便捷语法。
+/// 支持 String、Int、Double、Bool 等常见类型的自动推断。
+///
+/// - Note: 内部使用，您无需直接使用此类型
+public struct JSONValue<T> {
+    let json: JSON
+    let keyPath: String
+    
+    /// 获取值（如果存在且类型匹配）
+    var value: T? {
+        let jsonValue = json[keyPath]
+        
+        // 根据类型进行转换（使用类型擦除和强制转换）
+        if T.self == String.self {
+            if jsonValue.type == .string && !jsonValue.stringValue.isEmpty {
+                return unsafeBitCast(jsonValue.stringValue, to: T.self)
+            }
+            return nil
+        } else if T.self == Int.self {
+            if jsonValue.type == .number {
+                return unsafeBitCast(jsonValue.intValue, to: T.self)
+            }
+            return nil
+        } else if T.self == Double.self {
+            if jsonValue.type == .number {
+                return unsafeBitCast(jsonValue.doubleValue, to: T.self)
+            }
+            return nil
+        } else if T.self == Bool.self {
+            if jsonValue.type == .bool {
+                return unsafeBitCast(jsonValue.boolValue, to: T.self)
+            }
+            return nil
+        }
+        
+        return nil
+    }
+}
+
+// MARK: - JSONValue 默认值支持
+
+/// 支持 `??` 操作符设置默认值（基本类型）
+extension JSONValue {
+    /// 使用 `??` 操作符设置默认值
+    ///
+    /// ### 使用示例
+    /// ```swift
+    /// let title = json["title"] ?? "默认标题"
+    /// let status = json["status"] ?? 0
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - lhs: JSON 值包装器
+    ///   - rhs: 默认值
+    /// - Returns: JSON 中的值（如果存在）或默认值
+    public static func ?? (lhs: JSONValue<T>, rhs: T) -> T {
+        return lhs.value ?? rhs
+    }
+}
+
+// MARK: - JSONValue 嵌套模型支持
+
+/// 支持嵌套模型解析（JSONParseable 类型）
+extension JSONValue where T: JSONParseable {
+    /// 获取嵌套模型值（如果存在且类型匹配）
+    var modelValue: T? {
+        let jsonValue = json[keyPath]
+        // 如果 JSON 值为 null 或不存在，返回 nil
+        if jsonValue.type == .null || jsonValue.type == .unknown {
+            return nil
+        }
+        // 使用 toModel 方法解析嵌套模型
+        return jsonValue.toModel(T.self)
+    }
+    
+    /// 使用 `??` 操作符设置默认值（嵌套模型）
+    ///
+    /// ### 使用示例
+    /// ```swift
+    /// let details = json["details"] ?? NewDetailsModel(json: JSON())!
+    /// // 或者使用默认模型
+    /// let defaultDetails = NewDetailsModel(json: JSON(["title": "默认详情"]))!
+    /// let details = json["details"] ?? defaultDetails
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - lhs: JSON 值包装器
+    ///   - rhs: 默认模型实例
+    /// - Returns: JSON 中的模型（如果存在）或默认模型
+    public static func ?? (lhs: JSONValue<T>, rhs: T) -> T {
+        return lhs.modelValue ?? rhs
+    }
+}
+
+// MARK: - JSONValue 嵌套模型数组支持
+
+/// 支持嵌套模型数组解析（[JSONParseable] 类型）
+/// 使用条件扩展来处理 Array<Element> 类型，其中 Element 遵循 JSONParseable
+extension JSONValue where T: RangeReplaceableCollection, T.Element: JSONParseable {
+    /// 获取嵌套模型数组值（如果存在且类型匹配）
+    var modelArrayValue: T? {
+        let jsonValue = json[keyPath]
+        // 如果 JSON 值为 null 或不存在，返回 nil
+        if jsonValue.type == .null || jsonValue.type == .unknown {
+            return nil
+        }
+        // 使用 toModelArray 方法解析嵌套模型数组
+        let array = jsonValue.toModelArray(T.Element.self)
+        // 将 [T.Element] 转换为 T 类型
+        // 由于 T 是 RangeReplaceableCollection，我们可以使用 init(_:) 初始化
+        return T(array)
+    }
+    
+    /// 使用 `??` 操作符设置默认值（嵌套模型数组）
+    ///
+    /// ### 使用示例
+    /// ```swift
+    /// let comments: [CommentModel] = json["comments"] ?? []
+    /// // 或者使用默认数组
+    /// let defaultComments: [CommentModel] = [CommentModel(json: JSON(["title": "默认"]))!]
+    /// let comments = json["comments"] ?? defaultComments
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - lhs: JSON 值包装器
+    ///   - rhs: 默认模型数组
+    /// - Returns: JSON 中的模型数组（如果存在）或默认数组
+    public static func ?? (lhs: JSONValue<T>, rhs: T) -> T {
+        return lhs.modelArrayValue ?? rhs
+    }
+}
+
 // MARK: - JSON解析协议
 
 /// JSONParseable 协议
@@ -31,6 +167,101 @@ public protocol JSONParseable {
     /// 从JSON初始化模型
     /// - Parameter json: SwiftyJSON.JSON对象
     init?(json: JSON)
+}
+
+// MARK: - Codable 自动桥接支持（测试/临时版本）
+
+/// ⚠️ 测试/临时版本：为同时实现 Codable 的类型提供 JSONParseable 自动桥接
+///
+/// 此功能为测试版本，可能会在后续版本中调整或移除。
+/// 当模型同时实现 `Codable` 和 `JSONParseable` 时，无需手动实现 `init?(json:)`，
+/// 系统会自动使用 Codable 的 Decodable 能力进行解析。
+///
+/// ### 使用示例
+/// ```swift
+/// // 方式1：自动桥接（最简单，无默认值需求）
+/// struct NewModel: Codable, JSONParseable {
+///     let title: String
+///     var id = UUID()
+///     // 无需实现 init?(json:) 或 init(from decoder:)，自动从 Codable 桥接
+/// }
+///
+/// // 方式2：自定义 Decodable 实现（支持默认值）
+/// struct NewModel: Codable, JSONParseable {
+///     let title: String
+///     let status: Int
+///
+///     enum CodingKeys: String, CodingKey {
+///         case title, status
+///     }
+///
+///     // 实现自定义解码
+///     init(from decoder: Decoder) throws {
+///         let container = try decoder.container(keyedBy: CodingKeys.self)
+///         title = try container.decodeIfPresent(String.self, forKey: .title) ?? "默认标题"
+///         status = try container.decodeIfPresent(Int.self, forKey: .status) ?? 0
+///     }
+///     // 注意：如果实现了 init(from decoder:)，自动桥接会优先使用它
+/// }
+///
+/// // 方式3：手动实现 init?(json:)（特殊场景）
+/// struct NewModel: Codable, JSONParseable {
+///     let title: String
+///     init?(json: JSON) {
+///         self.title = json.string("title", defaultValue: "默认标题")
+///     }
+/// }
+/// ```
+///
+/// - Note:
+///   - ⚠️ 此功能为测试版本，API 可能会变化
+///   - **优先级**：`init(from decoder:)` > `init?(json:)` > 自动桥接
+///   - 如果实现了自定义 `init(from decoder:)`，自动桥接会优先使用它（完全支持默认值）
+///   - 如果手动实现了 `init?(json:)`，则优先使用手动实现
+///   - 自动桥接使用 `JSONDecoder` 进行解码，支持所有 Codable 特性（如 CodingKeys、自定义解码等）
+///   - 性能：需要将 JSON 转换为 Data 再解码，性能略低于直接解析，但可接受
+///   - **默认值支持**：自动桥接不支持默认值，如需默认值请使用方式2（自定义 `init(from decoder:)`）
+extension JSONParseable where Self: Decodable {
+    /// 从 JSON 自动桥接初始化（使用 Codable）
+    ///
+    /// ⚠️ 测试/临时版本：此方法会自动将 SwiftyJSON.JSON 转换为 Data，然后使用 JSONDecoder 解码。
+    ///
+    /// - Parameter json: SwiftyJSON.JSON 对象
+    /// - Returns: 解码后的模型实例，失败返回 nil
+    ///
+    /// - Note:
+    ///   - 如果模型实现了自定义 `init(from decoder:)`，会自动使用它（支持默认值）
+    ///   - 如果模型手动实现了 `init?(json:)`，会优先使用手动实现
+    ///   - 自动桥接不支持默认值，如需默认值请实现自定义 `init(from decoder:)`
+    public init?(json: JSON) {
+        // 步骤1：将 JSON 转换为 Data
+        // 使用 json.rawData() 方法，这是 SwiftyJSON 提供的标准方法
+        guard let data = try? json.rawData() else {
+            #if DEBUG
+            debugPrint("[JSONParseable] ⚠️ Codable 自动桥接失败: JSON 转 Data 失败")
+            #endif
+            return nil
+        }
+        
+        // 步骤2：使用 JSONDecoder 解码为 Codable 类型
+        // 如果模型实现了自定义 init(from decoder:)，会自动使用它
+        do {
+            let decoder = JSONDecoder()
+            // 可以在这里配置 decoder 的选项，如日期格式、键名策略等
+            // decoder.dateDecodingStrategy = .iso8601
+            // decoder.keyDecodingStrategy = .convertFromSnakeCase
+            
+            self = try decoder.decode(Self.self, from: data)
+        } catch {
+            // 解码失败，返回 nil
+            // 在 DEBUG 模式下打印错误信息，便于调试
+            #if DEBUG
+            debugPrint("[JSONParseable] ⚠️ Codable 自动桥接失败: \(error)")
+            debugPrint("[JSONParseable] JSON 内容: \(json)")
+            #endif
+            return nil
+        }
+    }
 }
 
 // MARK: - SwiftyJSON 模型转换扩展
@@ -333,6 +564,66 @@ public extension JSON {
     /// - Returns: JSON 字典或 nil
     func optionalDictionary(_ keyPath: String) -> [String: JSON]? {
         return self[keyPath].type == .dictionary ? self[keyPath].dictionaryValue : nil
+    }
+    
+    // MARK: - 类型推断下标访问（便捷方式）
+    
+    /// 类型推断的下标访问，支持 `??` 操作符设置默认值
+    ///
+    /// 提供更简洁的语法来访问 JSON 值，支持类型推断和默认值。
+    /// **支持嵌套路径访问**和**嵌套模型解析**。
+    ///
+    /// ### 使用示例
+    /// ```swift
+    /// // 简单字段
+    /// let title = json["title"] ?? "默认标题"
+    /// let status = json["status"] ?? 0
+    /// let price = json["price"] ?? 0.0
+    /// let isActive = json["isActive"] ?? false
+    ///
+    /// // 嵌套路径（支持点号分隔）
+    /// let userName = json["user.name"] ?? "未知用户"
+    /// let userAge = json["user.profile.age"] ?? 0
+    /// let city = json["data.address.city"] ?? "未知城市"
+    ///
+    /// // 嵌套模型解析
+    /// struct NewModel: JSONParseable {
+    ///     let title: String
+    ///     let details: NewDetailsModel
+    ///     let comments: [CommentModel]
+    ///
+    ///     init?(json: JSON) {
+    ///         self.title = json["title"] ?? "默认标题"
+    ///         
+    ///         // 单个嵌套模型：方式1（使用 ?? 操作符）
+    ///         let defaultDetails = NewDetailsModel(json: JSON(["title": "默认详情"]))!
+    ///         self.details = json["details"] ?? defaultDetails
+    ///         
+    ///         // 单个嵌套模型：方式2（使用 toModel 方法，推荐）
+    ///         // self.details = json.toModel(NewDetailsModel.self, keyPath: "details") ?? defaultDetails
+    ///         
+    ///         // 嵌套模型数组：使用 ?? 操作符
+    ///         self.comments = json["comments"] ?? []
+    ///         
+    ///         // 嵌套模型数组：使用 toModelArray 方法（推荐）
+    ///         // self.comments = json.toModelArray(CommentModel.self, keyPath: "comments")
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// - Parameter keyPath: JSON 键路径，支持嵌套路径（使用点号分隔，如 `"user.name"`）
+    /// - Returns: `JSONValue` 包装器，支持类型推断和 `??` 操作符
+    ///
+    /// - Note:
+    ///   - 此方法提供便捷语法，不影响现有的 `string(_:defaultValue:)` 等方法
+    ///   - 支持类型推断，编译器会自动推断返回类型
+    ///   - **支持嵌套路径**：使用点号分隔的路径（如 `"user.name"`），与现有方法行为一致
+    ///   - **支持嵌套模型**：如果类型遵循 `JSONParseable` 协议，会自动解析嵌套模型
+    ///   - 如果 JSON 中不存在该键或类型不匹配，返回 nil，可使用 `??` 设置默认值
+    ///   - 嵌套路径访问与 `json.string("user.name", defaultValue:)` 等现有方法行为完全一致
+    ///   - **嵌套模型建议**：对于嵌套模型，推荐使用 `json.toModel(_:keyPath:)` 方法，更安全且支持可选值
+    subscript<T>(_ keyPath: String) -> JSONValue<T> {
+        return JSONValue(json: self, keyPath: keyPath)
     }
 
     /// 安全获取嵌套 JSON 字符串并解析

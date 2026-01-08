@@ -19,9 +19,9 @@ import Alamofire
 ///
 /// - Note:
 ///   - `applyBasicURL` 为 true 时，path 会自动与配置的 basicURL 拼接。
-///   - 支持自定义 ParameterEncoder，便于特殊接口适配。
+///   - 支持自定义 CryoParameterEncoder，便于特殊接口适配。
 ///
-/// - SeeAlso: ``ParameterEncoder``, ``CryoNet/request(_:parameters:headers:interceptor:)``
+/// - SeeAlso: ``CryoParameterEncoder``, ``CryoNet/request(_:parameters:headers:interceptor:)``
 @available(iOS 13, *)
 public struct RequestModel {
     /// api 接口路径（如 "/user/info"）
@@ -34,7 +34,7 @@ public struct RequestModel {
     var method: HTTPMethod = .get
     
     /// 参数编码格式（默认 json）
-    var encoding: ParameterEncoder = .jsonDefault
+    var encoding: CryoParameterEncoder = .jsonDefault
     
     /// 超时时间（秒）
     var overtime: Double
@@ -54,7 +54,7 @@ public struct RequestModel {
         path: String,
         applyBasicURL: Bool = true,
         method: HTTPMethod = .post,
-        encoding: ParameterEncoder = .jsonDefault,
+        encoding: CryoParameterEncoder = .jsonDefault,
         overtime: Double = 30,
         explain: String = ""
     ) {
