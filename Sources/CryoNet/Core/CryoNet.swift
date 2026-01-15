@@ -1,7 +1,7 @@
 import Foundation
-import Alamofire
+@preconcurrency import Alamofire
 import SwiftUI
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 
 // MARK: - 配置对象
 
@@ -109,7 +109,7 @@ public struct CryoNetConfiguration: Sendable {
 /// ```swift
 /// // `MyAPI.getUserInfo` 为 `RequestModel`
 /// cryoNet.request(MyAPI.getUserInfo, parameters: ["id": 123])
-///     .responseModel(of: User.self) { response in
+///     .responseModel(type: User.self) { user in
 ///         print("User: \(user.name)")
 ///     }
 /// ```
@@ -313,7 +313,7 @@ public extension CryoNet {
     ///
     /// - Parameters:
     ///   - model: 包含请求路径、HTTP 方法、编码方式和超时设置的 ``RequestModel`` 实例。
-    ///   - parameters: 可选的请求参数字典，将根据 `model.encoding` 进行编码。默认为 `nil`。
+    ///   - parameters: 可选的请求参数字典（`Parameters?` 类型，即 `[String: any Any & Sendable]?`），将根据 `model.encoding` 进行编码。参数值必须满足 `Sendable` 协议。默认为 `nil`。
     ///   - headers: 可选的额外 HTTP 请求头数组，将与 ``CryoNetConfiguration`` 中的基础请求头合并。默认为空数组。
     ///   - interceptor: 可选的自定义请求拦截器，如果提供，将覆盖 ``CryoNetConfiguration`` 中的默认拦截器。默认为 `nil`。
     ///
@@ -327,8 +327,8 @@ public extension CryoNet {
     ///    method: .get,   // 请求方式
     /// )
     /// cryoNet.request(getUsers, parameters: ["page": 1, "limit": 10])
-    ///     .responseModel(of: User.self) { value in
-    ///         print("获取到 \(value.count) 个用户")
+    ///     .responseModel(type: User.self) { users in
+    ///         print("获取到 \(users.count) 个用户")
     ///     }
     ///
     /// // 发起一个 POST 请求创建新用户
@@ -337,7 +337,7 @@ public extension CryoNet {
     ///    method: .post,   // 请求方式
     /// )
     /// let newUser = ["name": "John Doe", "email": "john.doe@example.com"]
-    /// cryoNet.request(createUser, parameters: newUser, method: .post)
+    /// cryoNet.request(createUser, parameters: newUser)
     ///     .responseJSON { response in
     ///         debugPrint(response)
     ///     }
@@ -347,7 +347,7 @@ public extension CryoNet {
     @discardableResult
     func request(
         _ model: RequestModel,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
@@ -363,6 +363,7 @@ public extension CryoNet {
             )
         }
         
+        let timeout = model.overtime
         let request = AF.request(
             fullURL,
             method: model.method,
@@ -370,7 +371,7 @@ public extension CryoNet {
             encoding: model.encoding.getEncoding(),
             headers: mergedHeaders,
             interceptor: adapter
-        ) { $0.timeoutInterval = model.overtime }
+        ) { @Sendable in $0.timeoutInterval = timeout }
         .validate()
         
         return CryoResult(request: request, interceptor: userInterceptor)
@@ -384,14 +385,14 @@ public extension CryoNet {
 public extension CryoNet {
     /// 发起流式请求，并返回封装的 `CryoStreamResult`
     /// - Parameters:
-    /// - model: 请求模型
-    /// - parameters: 请求参数（可选）
-    /// - headers: 请求头（可选）
-    /// - interceptor: 请求拦截器（可选）
+    ///   - model: 请求模型
+    ///   - parameters: 请求参数（可选，`Parameters?` 类型，即 `[String: any Any & Sendable]?`，参数值必须满足 `Sendable` 协议）
+    ///   - headers: 请求头（可选）
+    ///   - interceptor: 请求拦截器（可选）
     /// - Returns: ``CryoStreamResult``，包含 `Alamofire` 的 `DataStreamRequest`
     func streamRequest(
         _ model: RequestModel,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: [HTTPHeader] = [],
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoStreamResult {

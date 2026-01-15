@@ -25,7 +25,12 @@ public protocol RequestInterceptorProtocol: Sendable {
 }
 
 /// 拦截器配置查询协议，便于调试和业务错误处理。
-public protocol InterceptorConfigProvider {
+///
+/// 此协议用于获取拦截器的配置信息，主要用于调试日志和错误处理。
+/// 注意：返回的 `[String: Any]` 不满足 `Sendable`，但由于仅用于调试/日志场景，实现类可以使用 `@unchecked Sendable`。
+public protocol InterceptorConfigProvider: Sendable {
     /// 获取拦截器配置信息
+    ///
+    /// - Returns: 包含拦截器配置信息的字典，主要用于调试和错误处理
     func getInterceptorConfig() -> [String: Any]
 }

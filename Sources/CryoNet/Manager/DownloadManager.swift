@@ -3,14 +3,13 @@ import Alamofire
 
 #if os(iOS) || os(watchOS) || os(macOS)
 import Photos
-import UIKit
 #endif
 
 // MARK: - 下载任务状态
 /// 下载任务的状态枚举。
 ///
 /// 定义了下载任务在其生命周期中可能经历的各种状态。
-public enum DownloadState: String {
+public enum DownloadState: String, Sendable {
     /// 任务处于等待状态，尚未开始下载或已完成。
     case idle
     /// 任务正在进行下载。
@@ -29,7 +28,7 @@ public enum DownloadState: String {
 /// 批量或全部下载任务的整体状态枚举。
 ///
 /// 用于表示一组下载任务的聚合状态，方便UI层进行整体展示和控制。
-public enum DownloadBatchState: String {
+public enum DownloadBatchState: String, Sendable {
     /// 没有下载任务，或者所有任务都处于非活动状态。
     case idle
     /// 所有未完成的任务都在下载中。
@@ -44,7 +43,7 @@ public enum DownloadBatchState: String {
 /// 下载任务的信息结构体。
 ///
 /// 该结构体用于管理和展示下载任务的关键信息，实现了 `Identifiable` 和 `Equatable` 协议，方便在SwiftUI等框架中使用。
-public struct DownloadTask: Identifiable, Equatable {
+public struct DownloadTask: Identifiable, Equatable, @unchecked Sendable {
     public static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
         lhs.id == rhs.id
     }
@@ -63,7 +62,7 @@ public struct DownloadTask: Identifiable, Equatable {
     /// 关联的Alamofire下载请求对象。
     public var response: DownloadRequest?
     /// 附加参数（query/body参数，可选）。
-    public let parameters: [String: Any]?
+    public let parameters: Parameters?
     /// 单任务自定义header（可选）。
     public let headers: HTTPHeaders?
 }
@@ -158,17 +157,17 @@ public actor DownloadManager {
     
     // MARK: - 闭包回调属性
     /// 单任务状态或进度更新回调
-    private var onDownloadDidUpdate: ((DownloadTask) -> Void)?
+    private var onDownloadDidUpdate: (@Sendable (DownloadTask) -> Void)?
     /// 活跃任务列表更新回调
-    private var onActiveTasksUpdate: (([DownloadTask]) -> Void)?
+    private var onActiveTasksUpdate: (@Sendable ([DownloadTask]) -> Void)?
     /// 已完成任务列表更新回调
-    private var onCompletedTasksUpdate: (([DownloadTask]) -> Void)?
+    private var onCompletedTasksUpdate: (@Sendable ([DownloadTask]) -> Void)?
     /// 总体进度与状态更新回调
-    private var onProgressUpdate: ((Double, DownloadBatchState) -> Void)?
+    private var onProgressUpdate: (@Sendable (Double, DownloadBatchState) -> Void)?
     /// 已失败任务列表更新回调
-    private var onFailedTasksUpdate: (([DownloadTask]) -> Void)?
+    private var onFailedTasksUpdate: (@Sendable ([DownloadTask]) -> Void)?
     /// 已取消任务列表更新回调
-    private var onCancelTasksUpdate: (([DownloadTask]) -> Void)?
+    private var onCancelTasksUpdate: (@Sendable ([DownloadTask]) -> Void)?
     
     /// 创建下载管理器
     ///
@@ -237,7 +236,7 @@ public actor DownloadManager {
         pathOrURL: String,
         destination: URL? = nil,
         saveToAlbum: Bool = false,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil
     ) -> UUID {
         guard let url = makeAbsoluteURL(from: pathOrURL) else {
@@ -275,7 +274,7 @@ public actor DownloadManager {
         pathsOrURLs: [String],
         destinationFolder: URL? = nil,
         saveToAlbum: Bool = false,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil
     ) -> [UUID] {
         var ids: [UUID] = []
@@ -305,7 +304,7 @@ public actor DownloadManager {
         pathOrURL: String,
         destination: URL? = nil,
         saveToAlbum: Bool = false,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil
     ) async -> UUID {
         let id = addTask(
@@ -333,7 +332,7 @@ public actor DownloadManager {
         pathsOrURLs: [String],
         destinationFolder: URL? = nil,
         saveToAlbum: Bool = false,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil
     ) async -> [UUID] {
         var ids: [UUID] = []
@@ -579,11 +578,17 @@ public actor DownloadManager {
             interceptor: interceptorAdapter,
             to: destination
         )
-            .downloadProgress { [weak self] progress in
-                Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
+            .downloadProgress { progress in
+                let taskId = id
+                Task { @Sendable in
+                    await self.onProgress(id: taskId, progress: progress.fractionCompleted)
+                }
             }
-            .responseData { [weak self] response in
-                Task { await self?.onComplete(id: id, response: response) }
+            .responseData { response in
+                let taskId = id
+                Task { @Sendable in
+                    await self.onComplete(id: taskId, response: response)
+                }
             }
         currentTask.response = request
         tasks[id] = currentTask
@@ -650,13 +655,17 @@ public actor DownloadManager {
     
     /// 推送单任务更新事件
     private func notifySingleTaskUpdate(_ task: DownloadTask) {
+        let taskCopy = task
         for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? DownloadManagerDelegate)?.downloadDidUpdate(task: task)
+            nonisolated(unsafe) let unsafeDelegate = delegate as? DownloadManagerDelegate
+            Task { @MainActor @Sendable in
+                unsafeDelegate?.downloadDidUpdate(task: taskCopy)
             }
         }
         if let handler = onDownloadDidUpdate {
-            Task { await MainActor.run { handler(task) } }
+            Task { @MainActor @Sendable in
+                handler(taskCopy)
+            }
         }
     }
     
@@ -669,36 +678,48 @@ public actor DownloadManager {
         let cancelTasks = cancelledTasks()
 
         for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateActiveTasks(active)
-                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateCompletedTasks(completed)
-                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateCancelTasks(cancelTasks)
-                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateFailureTasks(failedTasks)
+            nonisolated(unsafe) let unsafeDelegate = delegate as? DownloadManagerDelegate
+            Task { @MainActor @Sendable in
+                unsafeDelegate?.downloadManagerDidUpdateActiveTasks(active)
+                unsafeDelegate?.downloadManagerDidUpdateCompletedTasks(completed)
+                unsafeDelegate?.downloadManagerDidUpdateCancelTasks(cancelTasks)
+                unsafeDelegate?.downloadManagerDidUpdateFailureTasks(failedTasks)
             }
         }
         if let handler = onActiveTasksUpdate {
-            Task { await MainActor.run { handler(active) } }
+            Task { @MainActor @Sendable in
+                handler(active)
+            }
         }
         if let handler = onCompletedTasksUpdate {
-            Task { await MainActor.run { handler(completed) } }
+            Task { @MainActor @Sendable in
+                handler(completed)
+            }
         }
         if let handler = onFailedTasksUpdate {
-            Task { await MainActor.run { handler(failedTasks) } }
+            Task { @MainActor @Sendable in
+                handler(failedTasks)
+            }
         }
         if let handler = onCancelTasksUpdate {
-            Task { await MainActor.run { handler(cancelTasks) } }
+            Task { @MainActor @Sendable in
+                handler(cancelTasks)
+            }
         }
     }
     private func notifyProgressAndBatchState() {
         let progress = calcOverallProgress()
         let batch = calcBatchState()
         for delegate in delegates.allObjects {
-            Task { @MainActor in
-                (delegate as? DownloadManagerDelegate)?.downloadManagerDidUpdateProgress(overallProgress: progress, batchState: batch)
+            nonisolated(unsafe) let unsafeDelegate = delegate as? DownloadManagerDelegate
+            Task { @MainActor @Sendable in
+                unsafeDelegate?.downloadManagerDidUpdateProgress(overallProgress: progress, batchState: batch)
             }
         }
         if let handler = onProgressUpdate {
-            Task { await MainActor.run { handler(progress,batch) } }
+            Task { @MainActor @Sendable in
+                handler(progress, batch)
+            }
         }
         if isOverallCompleted(), !overallCompletedCalled {
             overallCompletedCalled = true
@@ -814,7 +835,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为最新的任务信息
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onDownloadDidUpdate(_ handler: @escaping (DownloadTask) -> Void) -> Self {
+    public func onDownloadDidUpdate(_ handler: @escaping @Sendable (DownloadTask) -> Void) -> Self {
         self.onDownloadDidUpdate = handler
         return self
     }
@@ -823,7 +844,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为当前所有未完成任务
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onActiveTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+    public func onActiveTasksUpdate(_ handler: @escaping @Sendable ([DownloadTask]) -> Void) -> Self {
         self.onActiveTasksUpdate = handler
         return self
     }
@@ -832,7 +853,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为当前所有已完成任务
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onCompletedTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+    public func onCompletedTasksUpdate(_ handler: @escaping @Sendable ([DownloadTask]) -> Void) -> Self {
         self.onCompletedTasksUpdate = handler
         return self
     }
@@ -841,7 +862,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为当前所有已取消任务
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onCancelTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+    public func onCancelTasksUpdate(_ handler: @escaping @Sendable ([DownloadTask]) -> Void) -> Self {
         self.onCancelTasksUpdate = handler
         return self
     }
@@ -850,7 +871,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为当前所有已失败任务
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onFailedTasksUpdate(_ handler: @escaping ([DownloadTask]) -> Void) -> Self {
+    public func onFailedTasksUpdate(_ handler: @escaping @Sendable ([DownloadTask]) -> Void) -> Self {
         self.onFailedTasksUpdate = handler
         return self
     }
@@ -859,7 +880,7 @@ public actor DownloadManager {
     /// - Parameter handler: 回调闭包，参数为总体进度(0.0-1.0)和批量下载状态
     /// - Returns: Self，便于链式调用
     @discardableResult
-    public func onProgressUpdate(_ handler: @escaping (Double, DownloadBatchState) -> Void) -> Self {
+    public func onProgressUpdate(_ handler: @escaping @Sendable (Double, DownloadBatchState) -> Void) -> Self {
         self.onProgressUpdate = handler
         return self
     }

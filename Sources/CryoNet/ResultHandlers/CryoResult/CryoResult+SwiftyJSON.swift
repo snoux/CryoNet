@@ -1,5 +1,5 @@
 import Foundation
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 import Alamofire
 
 // MARK: - SwiftyJSON 模型转换扩展（同步回调）
@@ -20,19 +20,19 @@ public extension CryoResult {
     /// 响应为 SwiftyJSON 对象，并直接转换为模型
     ///
     /// - Parameters:
-    ///   - type: 模型类型，需实现 JSONParseable 协议
+    ///   - type: 模型类型，需实现 JSONParseable 协议且满足 Sendable
     ///   - keyPath: 可选，JSON路径，若为 nil 则用整个 JSON
     ///   - success: 成功回调，返回模型
     ///   - failed: 失败回调，返回 CryoError
     /// - Returns: CryoResult
     @discardableResult
-    func responseJSONModel<T: JSONParseable>(
+    func responseJSONModel<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
-        success: @escaping (T) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> CryoResult {
-        responseJSON { json in
+        responseJSON { @Sendable json in
             if let model = json.toModel(type, keyPath: keyPath) {
                 success(model)
             } else {
@@ -62,13 +62,16 @@ public extension CryoResult {
     /// - Returns: CryoResult
     @discardableResult
     func responseJSONModel<T>(
-        parser: @escaping (JSON) -> T?,
-        success: @escaping (T) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        parser: @escaping @Sendable (JSON) -> T?,
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> CryoResult {
-        responseJSON { json in
-            if let model = json.toModel(parser: parser) {
-                success(model)
+        let parserHandler = parser
+        let successHandler = success
+        let failedHandler = failed
+        responseJSON { @Sendable json in
+            if let model = json.toModel(parser: parserHandler) {
+                successHandler(model)
             } else {
                 let error = AFError.responseSerializationFailed(
                     reason: .decodingFailed(
@@ -79,10 +82,10 @@ public extension CryoResult {
                         )
                     )
                 )
-                failed(error)
+                failedHandler(error)
             }
-        } failed: { error in
-            failed(error)
+        } failed: { @Sendable error in
+            failedHandler(error)
         }
         return self
     }
@@ -90,19 +93,19 @@ public extension CryoResult {
     /// 响应为 SwiftyJSON 对象，并直接转换为模型数组
     ///
     /// - Parameters:
-    ///   - type: 模型类型，需实现 JSONParseable 协议
+    ///   - type: 模型类型，需实现 JSONParseable 协议且满足 Sendable
     ///   - keyPath: 可选，JSON路径
     ///   - success: 成功回调，返回模型数组
     ///   - failed: 失败回调
     /// - Returns: CryoResult
     @discardableResult
-    func responseJSONModelArray<T: JSONParseable>(
+    func responseJSONModelArray<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> CryoResult {
-        responseJSON { json in
+        responseJSON { @Sendable json in
             let modelArray = json.toModelArray(type, keyPath: keyPath)
             success(modelArray)
         } failed: { error in
@@ -122,15 +125,19 @@ public extension CryoResult {
     @discardableResult
     func responseJSONModelArray<T>(
         keyPath: String? = nil,
-        parser: @escaping (JSON) -> T?,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        parser: @escaping @Sendable (JSON) -> T?,
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> CryoResult {
-        responseJSON { json in
-            let modelArray = json.toModelArray(keyPath: keyPath, parser: parser)
-            success(modelArray)
-        } failed: { error in
-            failed(error)
+        let parserHandler = parser
+        let successHandler = success
+        let failedHandler = failed
+        let keyPathValue = keyPath
+        responseJSON { @Sendable json in
+            let modelArray = json.toModelArray(keyPath: keyPathValue, parser: parserHandler)
+            successHandler(modelArray)
+        } failed: { @Sendable error in
+            failedHandler(error)
         }
         return self
     }
@@ -152,19 +159,19 @@ public extension CryoResult {
     /// 从拦截器获取 SwiftyJSON 对象，并直接转换为模型
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 Sendable）
     ///   - keyPath: 可选，JSON路径
     ///   - success: 成功回调
     ///   - failed: 失败回调（错误信息字符串）
     /// - Returns: CryoResult
     @discardableResult
-    func interceptJSONModel<T: JSONParseable>(
+    func interceptJSONModel<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
-        success: @escaping (T) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -233,11 +240,14 @@ public extension CryoResult {
     /// - Returns: CryoResult
     @discardableResult
     func interceptJSONModel<T>(
-        parser: @escaping (JSON) -> T?,
-        success: @escaping (T) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        parser: @escaping @Sendable (JSON) -> T?,
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
+        let parserHandler = parser
+        let successHandler = success
+        let failedHandler = failed
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -245,22 +255,22 @@ public extension CryoResult {
                 if let data = originalData {
                     do {
                         let json = try JSON(data: data)
-                        if let model = json.toModel(parser: parser) {
+                        if let model = json.toModel(parser: parserHandler) {
                             debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                            success(model)
+                            successHandler(model)
                         } else {
                             let errorMessage = "未配置拦截器，SwiftyJSON自定义解析模型失败"
-                            failed(errorMessage)
+                            failedHandler(errorMessage)
                             debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
                         }
                     } catch {
                         let errorMessage = "未配置拦截器，JSON解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
+                        failedHandler(errorMessage)
                         debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
                     }
                 } else {
                     let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
+                    failedHandler(errorMessage)
                     debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
                 }
                 return
@@ -270,22 +280,22 @@ public extension CryoResult {
             case .success(let data):
                 do {
                     let json = try JSON(data: data)
-                    if let model = json.toModel(parser: parser) {
+                    if let model = json.toModel(parser: parserHandler) {
                         debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                        success(model)
+                        successHandler(model)
                     } else {
                         let errorMessage = "SwiftyJSON自定义解析模型失败"
-                        failed(errorMessage)
+                        failedHandler(errorMessage)
                         debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     }
                 } catch {
                     let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
+                    failedHandler(errorMessage)
                     debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
                 let errorMessage = error.localizedDescription
-                failed(errorMessage)
+                failedHandler(errorMessage)
                 if let originalData = originalData {
                     debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
                 } else {
@@ -299,19 +309,19 @@ public extension CryoResult {
     /// 从拦截器获取 SwiftyJSON 对象，并直接转换为模型数组
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 Sendable）
     ///   - keyPath: 可选，JSON路径
     ///   - success: 成功回调
     ///   - failed: 失败回调
     /// - Returns: CryoResult
     @discardableResult
-    func interceptJSONModelArray<T: JSONParseable>(
+    func interceptJSONModelArray<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -371,11 +381,15 @@ public extension CryoResult {
     @discardableResult
     func interceptJSONModelArray<T>(
         keyPath: String? = nil,
-        parser: @escaping (JSON) -> T?,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        parser: @escaping @Sendable (JSON) -> T?,
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
+        let parserHandler = parser
+        let successHandler = success
+        let failedHandler = failed
+        let keyPathValue = keyPath
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -383,17 +397,17 @@ public extension CryoResult {
                 if let data = originalData {
                     do {
                         let json = try JSON(data: data)
-                        let modelArray = json.toModelArray(keyPath: keyPath, parser: parser)
+                        let modelArray = json.toModelArray(keyPath: keyPathValue, parser: parserHandler)
                         debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                        success(modelArray)
+                        successHandler(modelArray)
                     } catch {
                         let errorMessage = "未配置拦截器，JSON解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
+                        failedHandler(errorMessage)
                         debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
                     }
                 } else {
                     let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
+                    failedHandler(errorMessage)
                     debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
                 }
                 return
@@ -403,17 +417,17 @@ public extension CryoResult {
             case .success(let data):
                 do {
                     let json = try JSON(data: data)
-                    let modelArray = json.toModelArray(keyPath: keyPath, parser: parser)
+                    let modelArray = json.toModelArray(keyPath: keyPathValue, parser: parserHandler)
                     debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(modelArray)
+                    successHandler(modelArray)
                 } catch {
                     let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
+                    failedHandler(errorMessage)
                     debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
                 let errorMessage = error.localizedDescription
-                failed(errorMessage)
+                failedHandler(errorMessage)
                 if let originalData = originalData {
                     debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
                 } else {
@@ -442,11 +456,11 @@ public extension CryoResult {
     /// await 方式，SwiftyJSON -> 单模型
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需实现 `JSONParseable` 协议且满足 `Sendable`）
     ///   - keyPath: 可选，JSON路径
     /// - Throws: 转换失败时抛出异常
     /// - Returns: 解码后的模型
-    func responseJSONModelAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
+    func responseJSONModelAsync<T: JSONParseable & Sendable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
         let json = try await responseJSONAsync()
         guard let model = json.toModel(type, keyPath: keyPath) else {
             throw AFError.responseSerializationFailed(
@@ -468,7 +482,7 @@ public extension CryoResult {
     ///   - parser: 自定义解析闭包
     /// - Throws: 转换失败时抛出异常
     /// - Returns: 解码后的模型
-    func responseJSONModelAsync<T>(parser: @escaping (JSON) -> T?) async throws -> T {
+    func responseJSONModelAsync<T>(parser: @escaping @Sendable (JSON) -> T?) async throws -> T {
         let json = try await responseJSONAsync()
         guard let model = json.toModel(parser: parser) else {
             throw AFError.responseSerializationFailed(
@@ -487,10 +501,10 @@ public extension CryoResult {
     /// await 方式，SwiftyJSON -> 模型数组
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需实现 `JSONParseable` 协议且满足 `Sendable`）
     ///   - keyPath: 可选，JSON路径
     /// - Returns: 模型数组
-    func responseJSONModelArrayAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> [T] {
+    func responseJSONModelArrayAsync<T: JSONParseable & Sendable>(_ type: T.Type, keyPath: String? = nil) async throws -> [T] {
         let json = try await responseJSONAsync()
         return json.toModelArray(type, keyPath: keyPath)
     }
@@ -501,7 +515,7 @@ public extension CryoResult {
     ///   - keyPath: 可选，JSON路径
     ///   - parser: 自定义解析闭包
     /// - Returns: 模型数组
-    func responseJSONModelArrayAsync<T>(keyPath: String? = nil, parser: @escaping (JSON) -> T?) async throws -> [T] {
+    func responseJSONModelArrayAsync<T>(keyPath: String? = nil, parser: @escaping @Sendable (JSON) -> T?) async throws -> [T] {
         let json = try await responseJSONAsync()
         return json.toModelArray(keyPath: keyPath, parser: parser)
     }
@@ -509,15 +523,15 @@ public extension CryoResult {
     /// await 方式，拦截器+SwiftyJSON -> 单模型
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 Sendable）
     ///   - keyPath: 可选，JSON路径
     /// - Throws: 错误处理
     /// - Returns: 模型
-    func interceptJSONModelAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            interceptJSONModel(type: type, keyPath: keyPath) { model in
+    func interceptJSONModelAsync<T: JSONParseable & Sendable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
+        try await withCheckedThrowingContinuation { @Sendable continuation in
+            interceptJSONModel(type: type, keyPath: keyPath) { @Sendable model in
                 continuation.resume(returning: model)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
@@ -529,11 +543,11 @@ public extension CryoResult {
     ///   - parser: 自定义解析闭包
     /// - Throws: 错误处理
     /// - Returns: 模型
-    func interceptJSONModelAsync<T>(parser: @escaping (JSON) -> T?) async throws -> T {
+    func interceptJSONModelAsync<T: Sendable>(parser: @escaping @Sendable (JSON) -> T?) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            interceptJSONModel(parser: parser) { model in
+            interceptJSONModel(parser: parser) { @Sendable model in
                 continuation.resume(returning: model)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
@@ -542,15 +556,15 @@ public extension CryoResult {
     /// await 方式，拦截器+SwiftyJSON -> 模型数组
     ///
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 Sendable）
     ///   - keyPath: 可选，JSON路径
     /// - Throws: 错误处理
     /// - Returns: 模型数组
-    func interceptJSONModelArrayAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> [T] {
-        try await withCheckedThrowingContinuation { continuation in
-            interceptJSONModelArray(type: type, keyPath: keyPath) { arr in
+    func interceptJSONModelArrayAsync<T: JSONParseable & Sendable>(_ type: T.Type, keyPath: String? = nil) async throws -> [T] {
+        try await withCheckedThrowingContinuation { @Sendable continuation in
+            interceptJSONModelArray(type: type, keyPath: keyPath) { @Sendable arr in
                 continuation.resume(returning: arr)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
@@ -563,11 +577,11 @@ public extension CryoResult {
     ///   - parser: 自定义解析闭包
     /// - Throws: 错误处理
     /// - Returns: 模型数组
-    func interceptJSONModelArrayAsync<T>(keyPath: String? = nil, parser: @escaping (JSON) -> T?) async throws -> [T] {
+    func interceptJSONModelArrayAsync<T: Sendable>(keyPath: String? = nil, parser: @escaping @Sendable (JSON) -> T?) async throws -> [T] {
         try await withCheckedThrowingContinuation { continuation in
-            interceptJSONModelArray(keyPath: keyPath, parser: parser) { arr in
+            interceptJSONModelArray(keyPath: keyPath, parser: parser) { @Sendable arr in
                 continuation.resume(returning: arr)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }

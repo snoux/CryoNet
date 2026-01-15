@@ -23,7 +23,7 @@ import Alamofire
 ///
 /// - SeeAlso: ``CryoParameterEncoder``, ``CryoNet/request(_:parameters:headers:interceptor:)``
 @available(iOS 13, *)
-public struct RequestModel {
+public struct RequestModel: Sendable {
     /// api 接口路径（如 "/user/info"）
     var path: String
     

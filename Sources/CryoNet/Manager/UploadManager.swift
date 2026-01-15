@@ -1,13 +1,13 @@
 import Foundation
 import Alamofire
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 
 // MARK: - 上传文件来源
 /// 上传文件来源（支持本地URL或内存二进制数据）
 ///
 /// - fileURL: 本地文件路径
 /// - fileData: 内存二进制数据
-public enum UploadFileSource {
+public enum UploadFileSource: Sendable {
     /// 本地文件路径
     case fileURL(URL)
     /// 内存二进制数据
@@ -27,7 +27,7 @@ public enum UploadFileSource {
 /// let fileItem1 = UploadFileItem(fileURL: someURL, name: "image")
 /// let fileItem2 = UploadFileItem(data: imageData, name: "image", fileName: "photo.png", mimeType: "image/png")
 /// ```
-public struct UploadFileItem {
+public struct UploadFileItem: Sendable {
     public let file: UploadFileSource
     public let name: String
     public let fileName: String?
@@ -71,7 +71,7 @@ public struct UploadFileItem {
 /// - completed: 任务已完成
 /// - failed: 任务失败
 /// - cancelled: 任务已取消
-public enum UploadState: String {
+public enum UploadState: String, Sendable {
     /// 任务处于等待状态
     case idle
     /// 任务正在上传
@@ -93,7 +93,7 @@ public enum UploadState: String {
 /// - uploading: 至少有一个任务正在上传
 /// - paused: 所有任务都已暂停
 /// - completed: 所有任务都已完成
-public enum UploadBatchState: String {
+public enum UploadBatchState: String, Sendable {
     /// 所有任务都未开始或无任务
     case idle
     /// 至少有一个任务正在上传
@@ -115,7 +115,7 @@ public enum UploadBatchState: String {
 /// ```swift
 /// let task = UploadTask<UploadModel>(id: UUID(), files: [item], progress: 0, state: .idle)
 /// ```
-public struct UploadTask<Model: JSONParseable>: Identifiable, Equatable {
+public struct UploadTask<Model: JSONParseable & Sendable>: Identifiable, Equatable, @unchecked Sendable {
     /// 任务唯一ID
     public let id: UUID
     /// 上传的文件项
@@ -211,14 +211,14 @@ public struct UploadTask<Model: JSONParseable>: Identifiable, Equatable {
 /// await uploadManager.startTask(id: taskID)
 /// ```
 ///
-public actor UploadManager<Model: JSONParseable> {
+public actor UploadManager<Model: JSONParseable & Sendable> {
     // MARK: - 基本属性
     /// 队列唯一标识
     public let identifier: String
     /// 全局上传API接口URL
     public let uploadURL: URL
     /// 全局表单参数
-    public let parameters: [String: Any]?
+    public let parameters: Parameters?
     /// 全局HTTP请求头
     public let headers: HTTPHeaders?
     /// 最大并发上传数
@@ -241,17 +241,17 @@ public actor UploadManager<Model: JSONParseable> {
     
     // MARK: - 链式闭包事件属性
     /// 单任务状态更新回调（每当某个上传任务变化时触发）
-    private var _onUploadDidUpdate: ((UploadTask<Model>) -> Void)?
+    private var _onUploadDidUpdate: (@Sendable (UploadTask<Model>) -> Void)?
     /// 批量总体进度或批量状态更新回调（如所有任务进度、整体状态变化时触发）
-    private var _onProgressUpdate: ((Double, UploadBatchState) -> Void)?
+    private var _onProgressUpdate: (@Sendable (Double, UploadBatchState) -> Void)?
     /// 所有任务列表变化回调（任务有增删或状态变更时触发，含全部状态）
-    private var _onTasksUpdate: (([UploadTask<Model>]) -> Void)?
+    private var _onTasksUpdate: (@Sendable ([UploadTask<Model>]) -> Void)?
     /// 未完成任务列表变化回调（上传中、等待、暂停、失败等非完成状态变化时触发）
-    private var _onActiveTasksUpdate: (([UploadTask<Model>]) -> Void)?
+    private var _onActiveTasksUpdate: (@Sendable ([UploadTask<Model>]) -> Void)?
     /// 已完成任务列表变化回调（完成任务变化时触发）
-    private var _onCompletedTasksUpdate: (([UploadTask<Model>]) -> Void)?
+    private var _onCompletedTasksUpdate: (@Sendable ([UploadTask<Model>]) -> Void)?
     /// 失败任务列表变化回调（任务失败相关变化时触发）
-    private var _onFailureTasksUpdated: (([UploadTask<Model>]) -> Void)?
+    private var _onFailedTasksUpdate: (@Sendable ([UploadTask<Model>]) -> Void)?
     
     
     /// 初始化方法（必填上传URL、拦截器，其它参数可选）
@@ -268,7 +268,7 @@ public actor UploadManager<Model: JSONParseable> {
     public init(
         identifier: String = UUID().uuidString,
         uploadURL: URL,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil,
         maxConcurrentUploads: Int = 3,
         interceptor: DefaultInterceptor,
@@ -289,7 +289,7 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Parameter handler: 任务更新回调
     /// - Returns: Self
     @discardableResult
-    public func uploadDidUpdate(_ handler: @escaping (UploadTask<Model>) -> Void) -> Self {
+    public func uploadDidUpdate(_ handler: @escaping @Sendable (UploadTask<Model>) -> Void) -> Self {
         self._onUploadDidUpdate = handler
         return self
     }
@@ -298,7 +298,7 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Parameter handler: 总体进度变化回调
     /// - Returns: Self
     @discardableResult
-    public func onProgressUpdate(_ handler: @escaping (Double, UploadBatchState) -> Void) -> Self {
+    public func onProgressUpdate(_ handler: @escaping @Sendable (Double, UploadBatchState) -> Void) -> Self {
         self._onProgressUpdate = handler
         return self
     }
@@ -307,7 +307,7 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Parameter handler: 所有任务变化回调
     /// - Returns: Self
     @discardableResult
-    public func onTasksUpdate(_ handler: @escaping ([UploadTask<Model>]) -> Void) -> Self {
+    public func onTasksUpdate(_ handler: @escaping @Sendable ([UploadTask<Model>]) -> Void) -> Self {
         self._onTasksUpdate = handler
         return self
     }
@@ -316,18 +316,18 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Parameter handler: 未完成任务变化回调
     /// - Returns: Self
     @discardableResult
-    public func onActiveTasksUpdate(_ handler: @escaping ([UploadTask<Model>]) -> Void) -> Self {
+    public func onActiveTasksUpdate(_ handler: @escaping @Sendable ([UploadTask<Model>]) -> Void) -> Self {
         self._onActiveTasksUpdate = handler
         return self
     }
     
     /// 注册已失败任务列表变化事件
     ///
-    /// - Parameter handler: 未完成任务变化回调
+    /// - Parameter handler: 已失败任务变化回调
     /// - Returns: Self
     @discardableResult
-    public func onFailureTasksUpdated(_ handler: @escaping ([UploadTask<Model>]) -> Void) -> Self {
-        self._onFailureTasksUpdated = handler
+    public func onFailedTasksUpdate(_ handler: @escaping @Sendable ([UploadTask<Model>]) -> Void) -> Self {
+        self._onFailedTasksUpdate = handler
         return self
     }
     
@@ -337,7 +337,7 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Parameter handler: 已完成任务变化回调
     /// - Returns: Self
     @discardableResult
-    public func onCompletedTasksUpdate(_ handler: @escaping ([UploadTask<Model>]) -> Void) -> Self {
+    public func onCompletedTasksUpdate(_ handler: @escaping @Sendable ([UploadTask<Model>]) -> Void) -> Self {
         self._onCompletedTasksUpdate = handler
         return self
     }
@@ -378,9 +378,11 @@ public actor UploadManager<Model: JSONParseable> {
             task.state = .uploading
             tasks[id] = task
             currentUploadingCount += 1
+            let files = task.files
+            let params = self.parameters
             let request = AF.upload(
-                multipartFormData: { multipart in
-                    for item in task.files {
+                multipartFormData: { @Sendable multipart in
+                    for item in files {
                         switch item.file {
                         case .fileData(let data):
                             let fileName = item.fileName ?? UUID().uuidString
@@ -392,25 +394,38 @@ public actor UploadManager<Model: JSONParseable> {
                             multipart.append(url, withName: item.name, fileName: fileName, mimeType: mimeType)
                         }
                     }
-                    self.parameters?.forEach { key, value in
+                    params?.forEach { key, value in
+                        // Parameters 的值是 any Any & Sendable，需要转换为字符串
+                        let stringValue: String
                         if let str = value as? String {
-                            multipart.append(str.data(using: .utf8)!, withName: key)
+                            stringValue = str
+                        } else if let int = value as? Int {
+                            stringValue = "\(int)"
+                        } else if let double = value as? Double {
+                            stringValue = "\(double)"
+                        } else if let bool = value as? Bool {
+                            stringValue = "\(bool)"
+                        } else {
+                            stringValue = "\(value)"
                         }
-                        if let int = value as? Int {
-                            multipart.append("\(int)".data(using: .utf8)!, withName: key)
-                        }
-                        // 其它类型可扩展
+                        multipart.append(stringValue.data(using: .utf8)!, withName: key)
                     }
                 },
                 to: uploadURL,
                 headers: headers,
                 interceptor: self.interceptorAdapter
             )
-            .uploadProgress { [weak self] progress in
-                Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
+            .uploadProgress { progress in
+                let taskId = id
+                Task { @Sendable in
+                    await self.onProgress(id: taskId, progress: progress.fractionCompleted)
+                }
             }
-            .response { [weak self] response in
-                Task { await self?.onComplete(id: id, response: response) }
+            .response { response in
+                let taskId = id
+                Task { @Sendable in
+                    await self.onComplete(id: taskId, response: response)
+                }
             }
             task.cryoResult = CryoResult(
                 request: request,
@@ -588,12 +603,11 @@ public actor UploadManager<Model: JSONParseable> {
                 completed = true
                 // 异步解析模型并保存回 tasks 字典
                 if let cryoResult = task.cryoResult {
-                    cryoResult.interceptJSONModel(type: Model.self) { value in
-                        var updatedTask = task
-                        updatedTask.model = value
-                        self.tasks[id] = updatedTask
-                        self.notifyTaskListUpdate()
-                        self.notifySingleTaskUpdate(task: updatedTask)
+                    let taskId = id
+                    cryoResult.interceptJSONModel(type: Model.self) { @Sendable value in
+                        Task { @MainActor in
+                            await self.updateTaskModel(id: taskId, model: value)
+                        }
                     }
                 }
             }
@@ -624,7 +638,9 @@ public actor UploadManager<Model: JSONParseable> {
     private func notifySingleTaskUpdate(task: UploadTask<Model>) {
 //        _onUploadDidUpdate?(task)
         if let handler = _onUploadDidUpdate {
-            Task { await MainActor.run { handler(task) } }
+            Task { @MainActor @Sendable in
+                handler(task)
+            }
         }
     }
     /// 通知任务列表变化
@@ -634,21 +650,29 @@ public actor UploadManager<Model: JSONParseable> {
         let completed = completedTasks()
         let failed = failedTasks()
         if let handler = _onTasksUpdate {
-            Task { await MainActor.run { handler(all) } }
+            Task { @MainActor @Sendable in
+                handler(all)
+            }
         }
         if let handler = _onActiveTasksUpdate {
-            Task { await MainActor.run { handler(active) } }
+            Task { @MainActor @Sendable in
+                handler(active)
+            }
         }
         if let handler = _onCompletedTasksUpdate {
-            Task { await MainActor.run { handler(completed) } }
+            Task { @MainActor @Sendable in
+                handler(completed)
+            }
         }
-        if let handler = _onFailureTasksUpdated {
-            Task { await MainActor.run { handler(failed) } }
+        if let handler = _onFailedTasksUpdate {
+            Task { @MainActor @Sendable in
+                handler(failed)
+            }
         }
 //        _onTasksUpdate?(all)
 //        _onActiveTasksUpdate?(active)
 //        _onCompletedTasksUpdate?(completed)
-//        _onFailureTasksUpdated?(failed)
+//        _onFailedTasksUpdate?(failed)
     }
     /// 通知总体进度和批量状态
     private func notifyProgressAndBatchState() {
@@ -656,7 +680,9 @@ public actor UploadManager<Model: JSONParseable> {
         let batch = calcBatchState()
 //        _onProgressUpdate?(progress, batch)
         if let handler = _onProgressUpdate {
-            Task { await MainActor.run { handler(progress,batch) } }
+            Task { @MainActor @Sendable in
+                handler(progress, batch)
+            }
         }
     }
     
@@ -725,5 +751,14 @@ public actor UploadManager<Model: JSONParseable> {
     /// - Returns: 所有任务ID
     public func allTaskIDs() -> [UUID] {
         Array(tasks.keys)
+    }
+    
+    /// 更新任务模型（内部辅助方法）
+    private func updateTaskModel(id: UUID, model: Model) {
+        guard var task = tasks[id] else { return }
+        task.model = model
+        tasks[id] = task
+        notifyTaskListUpdate()
+        notifySingleTaskUpdate(task: task)
     }
 }

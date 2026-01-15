@@ -1,5 +1,5 @@
 import Foundation
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 
 // MARK: - JSON 值包装器（支持类型推断和默认值）
 

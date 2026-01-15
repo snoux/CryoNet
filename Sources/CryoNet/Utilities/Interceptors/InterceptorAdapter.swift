@@ -1,6 +1,6 @@
 import Foundation
 import Alamofire
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 
 // MARK: - 默认响应结构配置
 
@@ -108,8 +108,8 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
         messageKey: String = "msg",
         dataKey: String = "data",
         successCode: Int = 200,
-        extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
-        isSuccess: ((JSON) -> Bool)? = nil
+        extractData: (@Sendable (JSON, Data) -> Result<Data, Error>)? = nil,
+        isSuccess: (@Sendable (JSON) -> Bool)? = nil
     ) {
         self.codeKey = codeKey
         self.messageKey = messageKey
@@ -118,9 +118,7 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
         
         // 如果提供了自定义闭包，使用自定义闭包；否则使用默认逻辑
         if let extractData = extractData {
-            self.extractDataHandler = { @Sendable json, originalData in
-                extractData(json, originalData)
-            }
+            self.extractDataHandler = extractData
         } else {
             // 默认实现：提取指定字段的 JSON，然后转换为 Data
             self.extractDataHandler = { @Sendable json, originalData in
@@ -130,9 +128,7 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
         }
         
         if let isSuccess = isSuccess {
-            self.isSuccessHandler = { @Sendable json in
-                isSuccess(json)
-            }
+            self.isSuccessHandler = isSuccess
         } else {
             // 默认实现：判断状态码是否等于成功码
             self.isSuccessHandler = { @Sendable json in
@@ -262,20 +258,16 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         messageKey: String = "msg",
         dataKey: String = "data",
         successCode: Int = 200,
-        extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
-        isSuccess: ((JSON) -> Bool)? = nil
+        extractData: (@Sendable (JSON, Data) -> Result<Data, Error>)? = nil,
+        isSuccess: (@Sendable (JSON) -> Bool)? = nil
     ) {
         let config = ResponseConfig(
             codeKey: codeKey,
             messageKey: messageKey,
             dataKey: dataKey,
             successCode: successCode,
-            extractData: extractData.map { handler in
-                { json, originalData in handler(json, originalData) }
-            },
-            isSuccess: isSuccess.map { handler in
-                { json in handler(json) }
-            }
+            extractData: extractData,
+            isSuccess: isSuccess
         )
         self.init(responseConfig: config)
     }
@@ -607,8 +599,10 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
 
     /// 请求适配，自动注入 token
     /// - Returns: 适配后的 URLRequest
-    func adapt(_ urlRequest: URLRequest, for session: Session, completion: @escaping (Result<URLRequest, Error>) -> Void) {
-        Task {
+    func adapt(_ urlRequest: URLRequest, for session: Session, completion: @escaping @Sendable (Result<URLRequest, Error>) -> Void) {
+        let interceptor = self.interceptor
+        let tokenManager = self.tokenManager
+        Task { @Sendable in
             if let modifiedRequest = await interceptor?.interceptRequest(urlRequest, tokenManager: tokenManager) {
                 completion(.success(modifiedRequest))
             } else {
@@ -619,8 +613,9 @@ class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
 
     /// 401 自动重试刷新 token
     /// - Returns: RetryResult
-    func retry(_ request: Request, for session: Session, dueTo error: Error, completion: @escaping (RetryResult) -> Void) {
-        Task {
+    func retry(_ request: Request, for session: Session, dueTo error: Error, completion: @escaping @Sendable (RetryResult) -> Void) {
+        let tokenManager = self.tokenManager
+        Task { @Sendable in
             if let afError = error as? AFError, afError.responseCode == 401 {
                 let newToken = await tokenManager.refreshToken()
                 if newToken != nil {

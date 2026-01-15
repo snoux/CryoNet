@@ -1,6 +1,6 @@
 import Foundation
 import Alamofire
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 
 // MARK: - 流式请求结果对象
 
@@ -16,7 +16,7 @@ import SwiftyJSON
 /// for try await data in stream.dataStream() { ... }
 /// ```
 @available(macOS 10.15, iOS 13, *)
-public class CryoStreamResult {
+public final class CryoStreamResult: @unchecked Sendable {
     /// 底层 Alamofire DataStreamRequest
     public let request: DataStreamRequest
 
@@ -93,9 +93,9 @@ public extension CryoStreamResult {
 public extension CryoStreamResult {
     /// 获取 JSONParseable 协议模型流
     ///
-    /// - Parameter type: 目标模型类型（需实现 JSONParseable 协议）
+    /// - Parameter type: 目标模型类型（需实现 JSONParseable 协议且满足 Sendable）
     /// - Returns: AsyncThrowingStream<T, Error>
-    func modelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
+    func modelStream<T: JSONParseable & Sendable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
                 switch stream.event {
@@ -128,10 +128,10 @@ public extension CryoStreamResult {
     /// 获取 Decodable 协议模型流
     ///
     /// - Parameters:
-    ///   - type: Decodable 模型类型
+    ///   - type: Decodable 模型类型（需满足 Sendable）
     ///   - decoder: 解码器，默认 JSONDecoder
     /// - Returns: AsyncThrowingStream<T, Error>
-    func decodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
+    func decodableStream<T: Decodable & Sendable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             request.responseStream { stream in
                 switch stream.event {
@@ -163,51 +163,87 @@ public extension CryoStreamResult {
 
 // MARK: - 行分隔 Decodable 流
 
+/// 行缓冲器 Actor，用于线程安全地管理按行分隔的数据流
+@available(macOS 10.15, iOS 13, *)
+private actor LineBuffer {
+    private var data: Data = Data()
+    
+    /// 追加新数据到缓冲区
+    func append(_ newData: Data) {
+        data.append(newData)
+    }
+    
+    /// 提取所有完整的行（以 \n 分隔），返回提取的行数组
+    func extractLines() -> [Data] {
+        var lines: [Data] = []
+        while let range = data.firstRange(of: [0x0A]) { // \n
+            let chunk = data.prefix(upTo: range.lowerBound)
+            data.removeSubrange(..<range.upperBound)
+            if !chunk.isEmpty {
+                lines.append(Data(chunk))
+            }
+        }
+        return lines
+    }
+    
+    /// 检查缓冲区是否为空
+    var isEmpty: Bool {
+        data.isEmpty
+    }
+    
+    /// 获取并清空剩余数据
+    func getRemaining() -> Data? {
+        let remaining = data
+        data = Data()
+        return remaining.isEmpty ? nil : remaining
+    }
+}
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
     /// 获取按行分隔的 Decodable 模型流（如 OpenAI 等接口格式）
     ///
     /// - Parameters:
-    ///   - type: Decodable 模型类型
+    ///   - type: Decodable 模型类型（需满足 Sendable）
     ///   - decoder: 解码器，默认 JSONDecoder
     /// - Returns: AsyncThrowingStream<T, Error>
-    func lineDelimitedDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
+    func lineDelimitedDecodableStream<T: Decodable & Sendable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
-            var buffer = Data()
+            let buffer = LineBuffer()
             request.responseStream { stream in
-                switch stream.event {
-                case .stream(let result):
-                    if case .success(let data) = result {
-                        buffer.append(data)
-                        while let range = buffer.firstRange(of: [0x0A]) { // \n
-                            let chunk = buffer.prefix(upTo: range.lowerBound)
-                            buffer.removeSubrange(..<range.upperBound)
-                            guard !chunk.isEmpty else { continue }
-                            do {
-                                let model = try decoder.decode(T.self, from: chunk)
-                                continuation.yield(model)
-                            } catch {
-                                if let str = String(data: chunk, encoding: .utf8) {
-                                    let decodingError = DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "解码失败: \(str)"))
-                                    continuation.yield(with: .failure(decodingError))
-                                } else {
-                                    continuation.yield(with: .failure(error))
+                Task {
+                    switch stream.event {
+                    case .stream(let result):
+                        if case .success(let data) = result {
+                            await buffer.append(data)
+                            let lines = await buffer.extractLines()
+                            for chunk in lines {
+                                do {
+                                    let model = try decoder.decode(T.self, from: chunk)
+                                    continuation.yield(model)
+                                } catch {
+                                    if let str = String(data: chunk, encoding: .utf8) {
+                                        let decodingError = DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "解码失败: \(str)"))
+                                        continuation.yield(with: .failure(decodingError))
+                                    } else {
+                                        continuation.yield(with: .failure(error))
+                                    }
                                 }
                             }
                         }
-                    }
-                case .complete(let completion):
-                    // 处理剩余 buffer
-                    if !buffer.isEmpty {
-                        do {
-                            let model = try decoder.decode(T.self, from: buffer)
-                            continuation.yield(model)
-                        } catch { /* 忽略最后解码错误 */ }
-                    }
-                    if let error = completion.error {
-                        continuation.finish(throwing: error)
-                    } else {
-                        continuation.finish()
+                    case .complete(let completion):
+                        // 处理剩余 buffer
+                        if let remaining = await buffer.getRemaining() {
+                            do {
+                                let model = try decoder.decode(T.self, from: remaining)
+                                continuation.yield(model)
+                            } catch { /* 忽略最后解码错误 */ }
+                        }
+                        if let error = completion.error {
+                            continuation.finish(throwing: error)
+                        } else {
+                            continuation.finish()
+                        }
                     }
                 }
             }
@@ -217,6 +253,40 @@ public extension CryoStreamResult {
 
 // MARK: - SSE 事件流
 
+/// SSE 缓冲区 Actor，用于线程安全地管理 SSE 事件流
+@available(macOS 10.15, iOS 13, *)
+private actor SSEBuffer {
+    private var buffer: String = ""
+    
+    /// 追加新文本到缓冲区
+    func append(_ text: String) {
+        buffer += text
+    }
+    
+    /// 提取所有完整的事件（以 \n\n 分隔），返回提取的事件数组
+    func extractEvents() -> [String] {
+        var events: [String] = []
+        while let range = buffer.range(of: "\n\n") {
+            let event = String(buffer[..<range.lowerBound])
+            buffer = String(buffer[range.upperBound...])
+            events.append(event)
+        }
+        return events
+    }
+    
+    /// 检查缓冲区是否为空
+    var isEmpty: Bool {
+        buffer.isEmpty
+    }
+    
+    /// 获取并清空剩余数据
+    func getRemaining() -> String? {
+        let remaining = buffer
+        buffer = ""
+        return remaining.isEmpty ? nil : remaining
+    }
+}
+
 @available(macOS 10.15, iOS 13, *)
 public extension CryoStreamResult {
     /// 获取 SSE（Server-Sent Events）事件字符串流
@@ -224,30 +294,32 @@ public extension CryoStreamResult {
     /// - Returns: AsyncThrowingStream<String, Error>
     func sseStream() -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            var buffer = ""
+            let buffer = SSEBuffer()
             request.responseStream { stream in
-                switch stream.event {
-                case .stream(let result):
-                    if case .success(let data) = result,
-                       let text = String(data: data, encoding: .utf8) {
-                        buffer += text
-                        while let range = buffer.range(of: "\n\n") {
-                            let event = String(buffer[..<range.lowerBound])
-                            buffer = String(buffer[range.upperBound...])
-                            if let eventData = Self.extractSSEData(from: event) {
-                                continuation.yield(eventData)
+                Task {
+                    switch stream.event {
+                    case .stream(let result):
+                        if case .success(let data) = result,
+                           let text = String(data: data, encoding: .utf8) {
+                            await buffer.append(text)
+                            let events = await buffer.extractEvents()
+                            for event in events {
+                                if let eventData = Self.extractSSEData(from: event) {
+                                    continuation.yield(eventData)
+                                }
                             }
                         }
-                    }
-                case .complete(let completion):
-                    // 处理剩余数据
-                    if !buffer.isEmpty, let eventData = Self.extractSSEData(from: buffer) {
-                        continuation.yield(eventData)
-                    }
-                    if let error = completion.error {
-                        continuation.finish(throwing: error)
-                    } else {
-                        continuation.finish()
+                    case .complete(let completion):
+                        // 处理剩余数据
+                        if let remaining = await buffer.getRemaining(),
+                           let eventData = Self.extractSSEData(from: remaining) {
+                            continuation.yield(eventData)
+                        }
+                        if let error = completion.error {
+                            continuation.finish(throwing: error)
+                        } else {
+                            continuation.finish()
+                        }
                     }
                 }
             }
@@ -256,13 +328,14 @@ public extension CryoStreamResult {
 
     /// 将 SSE 事件流转换为 JSONParseable 模型流
     ///
-    /// - Parameter type: JSONParseable 类型
+    /// - Parameter type: JSONParseable 类型（需满足 Sendable）
     /// - Returns: AsyncThrowingStream<T, Error>
-    func sseModelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
+    func sseModelStream<T: JSONParseable & Sendable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let streamResult = self
+            Task { @Sendable in
                 do {
-                    for try await event in sseStream() {
+                    for try await event in streamResult.sseStream() {
                         let json = JSON(parseJSON: event)
                         if let model = json.toModel(T.self) {
                             continuation.yield(model)
@@ -282,14 +355,15 @@ public extension CryoStreamResult {
     /// 将 SSE 事件流转换为 Decodable 模型流
     ///
     /// - Parameters:
-    ///   - type: Decodable 类型
+    ///   - type: Decodable 类型（需满足 Sendable）
     ///   - decoder: 解码器，默认 JSONDecoder
     /// - Returns: AsyncThrowingStream<T, Error>
-    func sseDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
+    func sseDecodableStream<T: Decodable & Sendable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let streamResult = self
+            Task { @Sendable in
                 do {
-                    for try await event in sseStream() {
+                    for try await event in streamResult.sseStream() {
                         guard let data = event.data(using: .utf8) else {
                             let err = DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "SSE 事件无法转换为 UTF-8 数据"))
                             continuation.yield(with: .failure(err))
@@ -332,10 +406,10 @@ public extension CryoStreamResult {
     /// 根据 Content-Type 自动判定并返回合适的 Decodable 流
     ///
     /// - Parameters:
-    ///   - type: Decodable 类型
+    ///   - type: Decodable 类型（需满足 Sendable）
     ///   - decoder: 解码器
     /// - Returns: AsyncThrowingStream<T, Error>
-    func autoDecodableStream<T: Decodable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
+    func autoDecodableStream<T: Decodable & Sendable>(_ type: T.Type, decoder: JSONDecoder = JSONDecoder()) -> AsyncThrowingStream<T, Error> {
         if let contentType = request.response?.headers.value(for: "Content-Type"),
            contentType.contains("text/event-stream") {
             return sseDecodableStream(type, decoder: decoder)
@@ -345,9 +419,9 @@ public extension CryoStreamResult {
 
     /// 根据 Content-Type 自动判定并返回合适的 JSONParseable 流
     ///
-    /// - Parameter type: JSONParseable 类型
+    /// - Parameter type: JSONParseable 类型（需满足 Sendable）
     /// - Returns: AsyncThrowingStream<T, Error>
-    func autoModelStream<T: JSONParseable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
+    func autoModelStream<T: JSONParseable & Sendable>(_ type: T.Type) -> AsyncThrowingStream<T, Error> {
         if let contentType = request.response?.headers.value(for: "Content-Type"),
            contentType.contains("text/event-stream") {
             return sseModelStream(type)
@@ -361,11 +435,11 @@ public extension CryoStreamResult {
 /// StreamDataItem
 ///
 /// 封装流式数据块：支持原始Data、SwiftyJSON、模型、SSE事件、错误等类型的统一包装
-public enum StreamDataItem {
+public enum StreamDataItem: @unchecked Sendable {
     case data(Data)
     case json(JSON)
-    case model(any JSONParseable)
-    case decodable(any Decodable)
+    case model(any JSONParseable & Sendable)
+    case decodable(any Decodable & Sendable)
     case sseEvent(String)
     case error(Error)
 
@@ -380,12 +454,12 @@ public enum StreamDataItem {
         return nil
     }
     /// 获取模型值
-    public var modelValue: (any JSONParseable)? {
+    public var modelValue: (any JSONParseable & Sendable)? {
         if case .model(let model) = self { return model }
         return nil
     }
     /// 获取 Decodable 值
-    public var decodableValue: (any Decodable)? {
+    public var decodableValue: (any Decodable & Sendable)? {
         if case .decodable(let model) = self { return model }
         return nil
     }
@@ -483,13 +557,13 @@ public extension CryoStreamResult {
 /// 用于管理和控制流式请求的控制器，支持随时启动、停止流消费任务。
 /// 提供多种流回调启动方式：Data、JSON、Decodable、SSE 事件
 @available(macOS 10.15, iOS 13, *)
-public final class CryoStreamController {
+public final class CryoStreamController: @unchecked Sendable {
     /// 关联的 CryoStreamResult
     public let streamResult: CryoStreamResult
     /// 当前流消费的任务对象
     private var task: Task<Void, Never>? = nil
     /// 当前控制器是否处于活跃状态
-    private(set) public var isActive: Bool = false
+    @MainActor private(set) public var isActive: Bool = false
 
     /// 初始化
     ///
@@ -501,86 +575,103 @@ public final class CryoStreamController {
     /// 启动原始 Data 流消费
     ///
     /// - Parameter onData: 消费闭包，返回 false 可提前结束流
-    public func startDataStream(onData: @escaping (Data) -> Bool) {
+    @MainActor
+    public func startDataStream(onData: @escaping @Sendable (Data) -> Bool) {
         stop()
         isActive = true
-        task = Task { [weak self] in
-            guard let self = self else { return }
+        let streamResult = self.streamResult
+        let onDataHandler = onData
+        task = Task { @Sendable in
             do {
-                for try await data in self.streamResult.dataStream() {
-                    if !onData(data) { break }
+                for try await data in streamResult.dataStream() {
+                    if !onDataHandler(data) { break }
                     if Task.isCancelled { break }
                 }
             } catch {
                 print("Error in dataStream: \(error)")
             }
-            self.isActive = false
+            await MainActor.run {
+                self.isActive = false
+            }
         }
     }
 
     /// 启动 JSON 流消费
     ///
     /// - Parameter onJSON: 消费闭包，返回 false 可提前结束流
-    public func startJSONStream(onJSON: @escaping (JSON) -> Bool) {
+    @MainActor
+    public func startJSONStream(onJSON: @escaping @Sendable (JSON) -> Bool) {
         stop()
         isActive = true
-        task = Task { [weak self] in
-            guard let self = self else { return }
+        let streamResult = self.streamResult
+        let onJSONHandler = onJSON
+        task = Task { @Sendable in
             do {
-                for try await json in self.streamResult.jsonStream() {
-                    if !onJSON(json) { break }
+                for try await json in streamResult.jsonStream() {
+                    if !onJSONHandler(json) { break }
                     if Task.isCancelled { break }
                 }
             } catch {
                 print("Error in jsonStream: \(error)")
             }
-            self.isActive = false
+            await MainActor.run {
+                self.isActive = false
+            }
         }
     }
 
     /// 启动 Decodable 流消费
     ///
     /// - Parameters:
-    ///   - type: Decodable 类型
+    ///   - type: Decodable 类型（需满足 Sendable）
     ///   - onModel: 消费闭包
-    public func startDecodableStream<T: Decodable>(_ type: T.Type, onModel: @escaping (T) -> Bool) {
+    @MainActor
+    public func startDecodableStream<T: Decodable & Sendable>(_ type: T.Type, onModel: @escaping @Sendable (T) -> Bool) {
         stop()
         isActive = true
-        task = Task { [weak self] in
-            guard let self = self else { return }
+        let streamResult = self.streamResult
+        let onModelHandler = onModel
+        task = Task { @Sendable in
             do {
-                for try await item in self.streamResult.decodableStream(type) {
-                    if !onModel(item) { break }
+                for try await item in streamResult.decodableStream(type) {
+                    if !onModelHandler(item) { break }
                     if Task.isCancelled { break }
                 }
             } catch {
                 print("Error in decodableStream: \(error)")
             }
-            self.isActive = false
+            await MainActor.run {
+                self.isActive = false
+            }
         }
     }
 
     /// 启动 SSE 事件字符串流消费
     ///
     /// - Parameter onEvent: 消费闭包
-    public func startSSEStream(onEvent: @escaping (String) -> Bool) {
+    @MainActor
+    public func startSSEStream(onEvent: @escaping @Sendable (String) -> Bool) {
         stop()
         isActive = true
-        task = Task { [weak self] in
-            guard let self = self else { return }
+        let streamResult = self.streamResult
+        let onEventHandler = onEvent
+        task = Task { @Sendable in
             do {
-                for try await event in self.streamResult.sseStream() {
-                    if !onEvent(event) { break }
+                for try await event in streamResult.sseStream() {
+                    if !onEventHandler(event) { break }
                     if Task.isCancelled { break }
                 }
             } catch {
                 print("Error in sseStream: \(error)")
             }
-            self.isActive = false
+            await MainActor.run {
+                self.isActive = false
+            }
         }
     }
 
     /// 停止流式请求（可随时调用，支持多线程安全）
+    @MainActor
     public func stop() {
         guard isActive else { return }
         isActive = false

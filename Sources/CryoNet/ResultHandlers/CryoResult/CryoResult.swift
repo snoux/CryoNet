@@ -1,5 +1,5 @@
 import Foundation
-import SwiftyJSON
+@preconcurrency import SwiftyJSON
 import Alamofire
 
 // MARK: - CryoResult 核心功能
@@ -105,8 +105,8 @@ extension CryoResult {
     /// - Parameter progress: 进度闭包（0~1）
     /// - Returns: self
     @discardableResult
-    public func progress(_ progress: @escaping (Double) -> Void) -> Self {
-        request.uploadProgress { uploadProgress in
+    public func progress(_ progress: @escaping @Sendable (Double) -> Void) -> Self {
+        request.uploadProgress { @Sendable uploadProgress in
             progress(uploadProgress.fractionCompleted)
         }
         return self
@@ -131,7 +131,7 @@ struct GenericCryoError: CryoError {
 }
 
 /// 拦截器错误包装器，包含拦截器配置和原始数据
-struct InterceptorError: CryoError {
+struct InterceptorError: CryoError, @unchecked Sendable {
     let message: String
     let originalData: Data?
     let interceptorInfo: [String: Any]?
@@ -154,10 +154,10 @@ extension CryoResult {
     /// - Returns: self
     @discardableResult
     public func responseData(
-        success: @escaping (Data) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable (Data) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> Self {
-        handleResponse { response in
+        handleResponse { @Sendable response in
             switch response.result {
             case .success(let data):
                 debugRequestLog(data, fromInterceptor: false)
@@ -177,10 +177,10 @@ extension CryoResult {
     /// - Returns: self
     @discardableResult
     public func responseJSON(
-        success: @escaping (JSON) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable (JSON) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> Self {
-        handleResponse { response in
+        handleResponse { @Sendable response in
             switch response.result {
             case .success(let data):
                 do {
@@ -202,17 +202,17 @@ extension CryoResult {
 
     /// 响应为单模型解码
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 `Decodable & Sendable`）
     ///   - success: 成功回调
     ///   - failed: 失败回调
     /// - Returns: self
     @discardableResult
-    public func responseModel<T: Decodable>(
+    public func responseModel<T: Decodable & Sendable>(
         type: T.Type,
-        success: @escaping (T) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> Self {
-        handleResponse { response in
+        handleResponse { @Sendable response in
             switch response.result {
             case .success(let data):
                 do {
@@ -237,17 +237,17 @@ extension CryoResult {
 
     /// 响应为模型数组解码
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 `Decodable & Sendable`）
     ///   - success: 成功回调
     ///   - failed: 失败回调
     /// - Returns: self
     @discardableResult
-    public func responseModelArray<T: Decodable>(
+    public func responseModelArray<T: Decodable & Sendable>(
         type: T.Type,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (CryoError) -> Void = { _ in }
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (CryoError) -> Void = { _ in }
     ) -> Self {
-        handleResponse { response in
+        handleResponse { @Sendable response in
             switch response.result {
             case .success(let data):
                 do {
@@ -285,17 +285,17 @@ extension CryoResult {
 
     /// 拦截器响应并解码单个模型
     /// - Parameters:
-    ///   - type: 模型类型
+    ///   - type: 模型类型（需满足 `Codable & Sendable`）
     ///   - success: 成功回调
     ///   - failed: 失败回调（错误信息 String）
     /// - Returns: self
     @discardableResult
-    public func interceptModel<T: Codable>(
+    public func interceptModel<T: Codable & Sendable>(
         type: T.Type,
-        success: @escaping (T) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -344,13 +344,18 @@ extension CryoResult {
     }
 
     /// 拦截器响应完整数据并解码模型
+    /// - Parameters:
+    ///   - type: 模型类型（需满足 `Codable & Sendable`）
+    ///   - success: 成功回调
+    ///   - failed: 失败回调（错误信息 String）
+    /// - Returns: self
     @discardableResult
-    public func interceptModelCompleteData<T: Codable>(
+    public func interceptModelCompleteData<T: Codable & Sendable>(
         type: T.Type,
-        success: @escaping (T) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable (T) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -400,10 +405,10 @@ extension CryoResult {
     /// 拦截器响应完整数据并解码 SwiftyJSON
     @discardableResult
     public func interceptJSON(
-        success: @escaping (JSON) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable (JSON) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -451,13 +456,18 @@ extension CryoResult {
     }
 
     /// 拦截器响应模型数组
+    /// - Parameters:
+    ///   - type: 模型类型（需满足 `Codable & Sendable`）
+    ///   - success: 成功回调
+    ///   - failed: 失败回调（错误信息 String）
+    /// - Returns: self
     @discardableResult
-    public func interceptModelArray<T: Codable>(
+    public func interceptModelArray<T: Codable & Sendable>(
         type: T.Type,
-        success: @escaping ([T]) -> Void,
-        failed: @escaping (String) -> Void = { _ in }
+        success: @escaping @Sendable ([T]) -> Void,
+        failed: @escaping @Sendable (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
+        self.request.response { @Sendable response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
@@ -512,9 +522,9 @@ extension CryoResult {
     /// 处理响应回调，封装 responseData
     /// - Parameter completion: 回调闭包
     private func handleResponse(
-        completion: @escaping (AFDataResponse<Data>) -> Void
+        completion: @escaping @Sendable (AFDataResponse<Data>) -> Void
     ) {
-        request.responseData { response in
+        request.responseData { @Sendable response in
             completion(response)
         }
     }
@@ -527,10 +537,10 @@ extension CryoResult {
     /// 异步获取原始 Data 数据
     /// - Returns: Data
     public func responseDataAsync() async throws -> Data {
-        return try await withCheckedThrowingContinuation { continuation in
-            responseData { data in
+        return try await withCheckedThrowingContinuation { @Sendable continuation in
+            responseData { @Sendable data in
                 continuation.resume(returning: data)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: error)
             }
         }
@@ -548,9 +558,9 @@ extension CryoResult {
     }
 
     /// 异步解码模型
-    /// - Parameter type: 模型类型
+    /// - Parameter type: 模型类型（需满足 `Decodable & Sendable`）
     /// - Returns: 解码后的模型
-    public func responseModelAsync<T: Decodable>(_ type: T.Type) async throws -> T {
+    public func responseModelAsync<T: Decodable & Sendable>(_ type: T.Type) async throws -> T {
         let data = try await responseDataAsync()
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -562,9 +572,9 @@ extension CryoResult {
     }
 
     /// 异步解码模型数组
-    /// - Parameter type: 模型类型
+    /// - Parameter type: 模型类型（需满足 `Decodable & Sendable`）
     /// - Returns: 解码后的模型数组
-    public func responseModelArrayAsync<T: Decodable>(_ type: T.Type) async throws -> [T] {
+    public func responseModelArrayAsync<T: Decodable & Sendable>(_ type: T.Type) async throws -> [T] {
         let data = try await responseDataAsync()
         do {
             return try JSONDecoder().decode([T].self, from: data)
@@ -592,26 +602,26 @@ extension CryoResult {
     }
 
     /// 异步拦截器获取模型
-    /// - Parameter type: 模型类型(Codable)
+    /// - Parameter type: 模型类型（需满足 `Codable & Sendable`）
     /// - Returns: 解码后的模型
-    public func interceptModelAsync<T: Codable>(_ type: T.Type) async throws -> T {
-        return try await withCheckedThrowingContinuation { continuation in
-            interceptModel(type: type) { model in
+    public func interceptModelAsync<T: Codable & Sendable>(_ type: T.Type) async throws -> T {
+        return try await withCheckedThrowingContinuation { @Sendable continuation in
+            interceptModel(type: type) { @Sendable model in
                 continuation.resume(returning: model)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
     }
 
     /// 异步拦截器获取完整数据模型
-    /// - Parameter type: 模型类型(Codable)
+    /// - Parameter type: 模型类型（需满足 `Codable & Sendable`）
     /// - Returns: 解码后的模型
-    public func interceptModelCompleteDataAsync<T: Codable>(_ type: T.Type) async throws -> T {
-        return try await withCheckedThrowingContinuation { continuation in
-            interceptModelCompleteData(type: type) { model in
+    public func interceptModelCompleteDataAsync<T: Codable & Sendable>(_ type: T.Type) async throws -> T {
+        return try await withCheckedThrowingContinuation { @Sendable continuation in
+            interceptModelCompleteData(type: type) { @Sendable model in
                 continuation.resume(returning: model)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
@@ -622,9 +632,11 @@ extension CryoResult {
     /// - Returns: JSON
     public func interceptJSONAsync() async throws -> JSON {
         return try await withCheckedThrowingContinuation { continuation in
-            interceptJSON { json in
-                continuation.resume(returning: json)
-            } failed: { error in
+            interceptJSON { @Sendable json in
+                // JSON 类型不满足 Sendable（SwiftyJSON 暂不支持 Swift 6），但在只读场景下是安全的
+                nonisolated(unsafe) let unsafeJSON = json
+                continuation.resume(returning: unsafeJSON)
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }
@@ -632,13 +644,13 @@ extension CryoResult {
 
     /// 异步拦截器获取模型数组
     /// 
-    /// - Parameter type: 模型类型(Codable)
+    /// - Parameter type: 模型类型（需满足 `Codable & Sendable`）
     /// - Returns: 模型数组
-    public func interceptModelArrayAsync<T: Codable>(_ type: T.Type) async throws -> [T] {
-        return try await withCheckedThrowingContinuation { continuation in
-            interceptModelArray(type: type) { models in
+    public func interceptModelArrayAsync<T: Codable & Sendable>(_ type: T.Type) async throws -> [T] {
+        return try await withCheckedThrowingContinuation { @Sendable continuation in
+            interceptModelArray(type: type) { @Sendable models in
                 continuation.resume(returning: models)
-            } failed: { error in
+            } failed: { @Sendable error in
                 continuation.resume(throwing: self.handleInterceptorError(error))
             }
         }

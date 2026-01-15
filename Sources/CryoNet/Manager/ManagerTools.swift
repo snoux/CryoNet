@@ -1,10 +1,10 @@
+import Foundation
+
 /// 推断本地文件的MIME类型和所属分类（支持常见扩展名，未匹配返回 octet-stream 和未知分类）
 ///
 /// - Parameter url: 文件URL
 /// - Returns: 包含分类和 MIME 的信息结构体
-
-import Foundation
-func mimeTypeForURL(_ url: URL) -> MIMETypeInfo {
+public func mimeTypeForURL(_ url: URL) -> MIMETypeInfo {
     let ext = url.pathExtension.lowercased()
 
     // MARK: - 图片类
@@ -119,7 +119,7 @@ func mimeTypeForURL(_ url: URL) -> MIMETypeInfo {
 }
 
 /// MIME 文件类型分类
-enum MIMECategory: String {
+public enum MIMECategory: String, Sendable {
     case image = "图片类"
     case audio = "音频类"
     case video = "视频类"
@@ -133,7 +133,7 @@ enum MIMECategory: String {
 }
 
 /// 包含 MIME 类型和所属分类
-struct MIMETypeInfo {
+public struct MIMETypeInfo: Sendable {
     let category: MIMECategory
     let mime: String
 }

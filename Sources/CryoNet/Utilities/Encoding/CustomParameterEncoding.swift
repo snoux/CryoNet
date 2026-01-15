@@ -101,7 +101,7 @@ public struct CustomParameterEncoding: ParameterEncoding {
 /// ```
 ///
 /// - SeeAlso: ``CustomParameterEncoding``, ``RequestModel``
-public enum CryoParameterEncoder {
+public enum CryoParameterEncoder: Sendable {
     /// 默认 URL 编码方式，参数通常以 `key=value&key2=value2` 的形式附加到 URL 上。
     case urlDefault
     /// 查询字符串 URL 编码方式，强制将所有参数编码为 URL 查询字符串（不考虑请求方式，始终拼接到 URL）。

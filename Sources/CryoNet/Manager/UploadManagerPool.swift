@@ -14,12 +14,12 @@ public actor UploadManagerPool {
     ///   - headers: HTTP头部
     ///   - maxConcurrentUploads: 最大并发上传数
     ///   - modelType: 必须传，保证泛型类型安全
-    ///  - tokenManager: 默认DefaultTokenManager()
+    ///   - tokenManager: 默认DefaultTokenManager()
     /// - Returns: 泛型 UploadManager<Model>
-    public func manager<Model: JSONParseable>(
+    public func manager<Model: JSONParseable & Sendable>(
         for identifier: String,
         uploadURL: URL,
-        parameters: [String: Any]? = nil,
+        parameters: Parameters? = nil,
         headers: HTTPHeaders? = nil,
         maxConcurrentUploads: Int = 3,
         modelType: Model.Type,
@@ -41,12 +41,12 @@ public actor UploadManagerPool {
     }
 
     /// 获取指定 identifier 的泛型 UploadManager
-    public func getManager<Model: JSONParseable>(for identifier: String, modelType: Model.Type) -> UploadManager<Model>? {
+    public func getManager<Model: JSONParseable & Sendable>(for identifier: String, modelType: Model.Type) -> UploadManager<Model>? {
         managers[identifier] as? UploadManager<Model>
     }
 
     /// 移除指定 identifier 的 UploadManager
-    public func removeManager<Model: JSONParseable>(for identifier: String, modelType: Model.Type) {
+    public func removeManager<Model: JSONParseable & Sendable>(for identifier: String, modelType: Model.Type) {
         Task{
             if let manager = managers[identifier] as? UploadManager<Model> {
                 await manager.deleteAllTasks()
