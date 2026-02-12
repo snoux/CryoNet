@@ -19,10 +19,6 @@ https://github.com/snoux/CryoNet.git
 - Alamofire `>= 5.10.2`
 - SwiftyJSON `>= 5.0.2`
 
-Swift 6 兼容性说明：
-- 当前版本已在 Swift 6 工具链下验证可用
-- 严格 Swift 6 语言模式兼容性仍在持续完善
-
 ## 快速开始
 
 ### 1) 初始化
