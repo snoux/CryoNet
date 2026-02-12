@@ -16,7 +16,7 @@ https://github.com/snoux/CryoNet.git
 ```
 
 依赖：
-- Alamofire `>= 5.10.2`
+- Alamofire `>= 5.11.1`
 - SwiftyJSON `>= 5.0.2`
 
 ## 快速开始
