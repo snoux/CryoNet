@@ -1,4 +1,4 @@
-name: Generate & Deploy swift-doc
+name: Generate & Deploy Docs
 
 on:
   push:
@@ -13,13 +13,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install swift-doc
+      - name: Generate Documentation (DocC)
         run: |
-          brew install swiftdocorg/formulae/swift-doc
-
-      - name: Generate Documentation
-        run: |
-          swift-doc generate Sources/ --output docs --format html --module-name CryoNet
+          swift package \
+            --allow-writing-to-directory ./docs \
+            generate-documentation \
+            --target CryoNet \
+            --output-path ./docs \
+            --transform-for-static-hosting \
+            --hosting-base-path CryoNet
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
