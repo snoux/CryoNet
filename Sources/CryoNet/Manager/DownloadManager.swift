@@ -1,9 +1,8 @@
 import Foundation
 import Alamofire
 
-#if os(iOS) || os(watchOS) || os(macOS)
+#if canImport(Photos)
 import Photos
-import UIKit
 #endif
 
 // MARK: - 下载任务状态
@@ -240,10 +239,27 @@ public actor DownloadManager {
         parameters: [String: Any]? = nil,
         headers: HTTPHeaders? = nil
     ) -> UUID {
-        guard let url = makeAbsoluteURL(from: pathOrURL) else {
-            fatalError("Invalid download url: \(pathOrURL)")
-        }
         let id = UUID()
+        guard let url = makeAbsoluteURL(from: pathOrURL) else {
+            let failedURL = URL(string: "about:blank")!
+            let fallbackName = UUID().uuidString
+            let destURL = destination ?? Self.defaultDownloadFolder().appendingPathComponent(fallbackName)
+            let task = DownloadTask(
+                id: id,
+                url: failedURL,
+                destination: destURL,
+                saveToAlbum: saveToAlbum,
+                progress: 0,
+                state: .failed,
+                response: nil,
+                parameters: parameters,
+                headers: headers
+            )
+            tasks[id] = task
+            notifyTaskListUpdate()
+            notifyProgressAndBatchState()
+            return id
+        }
         let destURL = destination ?? Self.defaultDownloadFolder().appendingPathComponent(url.lastPathComponent)
         let task = DownloadTask(
             id: id,
@@ -456,16 +472,7 @@ public actor DownloadManager {
         updateBatchStateIfNeeded()
     }
     public func pauseTask(id: UUID) {
-        guard var task = tasks[id] else { return }
-        guard task.state == .downloading else {
-            if task.state != .paused {
-                task.state = .paused
-                tasks[id] = task
-                notifyTaskListUpdate()
-                notifyProgressAndBatchState()
-            }
-            return
-        }
+        guard var task = tasks[id], task.state == .downloading else { return }
         task.response?.suspend()
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
         task.state = .paused
@@ -631,7 +638,7 @@ public actor DownloadManager {
                 currentTask.progress = 1.0
                 currentTask.state = .completed
                 tasks[id] = currentTask
-    #if os(iOS) || os(watchOS) || os(macOS)
+    #if canImport(Photos)
                 if currentTask.saveToAlbum {
                     if #available(iOS 14, watchOS 7, macOS 11, *) {
                         await Self.saveToAlbumIfNeeded(fileURL: currentTask.destination)
@@ -775,8 +782,8 @@ public actor DownloadManager {
         return downloadsFolder
     }
     
+    #if canImport(Photos)
     private static func saveToAlbumIfNeeded(fileURL: URL) async {
-#if os(iOS) || os(watchOS) || os(macOS)
         let category = mimeTypeForURL(fileURL).category
         guard category == .image || category == .video else { return }
         if #available(iOS 14, watchOS 7, macOS 11, *) {
@@ -794,9 +801,7 @@ public actor DownloadManager {
                 break
             }
         }
-#endif
     }
-#if os(iOS) || os(watchOS) || os(macOS)
     private static func performSaveToAlbum(fileURL: URL, isVideo: Bool) {
         PHPhotoLibrary.shared().performChanges {
             if isVideo {
