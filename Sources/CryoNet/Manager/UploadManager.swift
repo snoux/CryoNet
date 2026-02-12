@@ -434,23 +434,37 @@ public actor UploadManager<Model: JSONParseable> {
     public func pauseTask(id: UUID) {
         if var task = tasks[id], task.state == .uploading {
             task.response?.suspend()
+            currentUploadingCount = max(0, currentUploadingCount - 1)
             task.state = .paused
             tasks[id] = task
             notifyTaskListUpdate()
             notifyProgressAndBatchState()
             notifySingleTaskUpdate(task: task)
+            Task { await checkAndStartNext() }
         }
     }
     /// 启动任务
     /// - Parameter id: 任务ID
     public func resumeTask(id: UUID) {
         if var task = tasks[id], task.state == .paused {
-            task.response?.resume()
-            task.state = .uploading
-            tasks[id] = task
-            notifyTaskListUpdate()
-            notifyProgressAndBatchState()
-            notifySingleTaskUpdate(task: task)
+            if currentUploadingCount < maxConcurrentUploads {
+                task.response?.resume()
+                currentUploadingCount += 1
+                task.state = .uploading
+                tasks[id] = task
+                notifyTaskListUpdate()
+                notifyProgressAndBatchState()
+                notifySingleTaskUpdate(task: task)
+            } else {
+                if !pendingQueue.contains(id) {
+                    pendingQueue.append(id)
+                }
+                task.state = .idle
+                tasks[id] = task
+                notifyTaskListUpdate()
+                notifyProgressAndBatchState()
+                notifySingleTaskUpdate(task: task)
+            }
         } else if let task = tasks[id], task.state == .cancelled {
             startTask(id: id)
         }
@@ -575,32 +589,26 @@ public actor UploadManager<Model: JSONParseable> {
     private func onComplete(id: UUID, response: AFDataResponse<Data?>) async {
         guard var task = tasks[id] else { return }
         currentUploadingCount = max(0, currentUploadingCount - 1)
-        var completed = false
-        // 新增：处理取消
+
+        // 取消优先
         if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
             task.state = .cancelled
         } else if let error = response.error as NSError?, error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled {
             task.state = .cancelled
-        } else if let data = response.data, let json = try? JSON(data: data) {
-            if self.interceptor.isResponseSuccess(json: json) {
+        } else {
+            // 在 actor 内同步处理业务拦截和模型解析，避免并发回调覆盖状态
+            switch self.interceptor.interceptResponse(response) {
+            case .success(let businessData):
                 task.progress = 1.0
                 task.state = .completed
-                completed = true
-                // 异步解析模型并保存回 tasks 字典
-                if let cryoResult = task.cryoResult {
-                    cryoResult.interceptJSONModel(type: Model.self) { value in
-                        var updatedTask = task
-                        updatedTask.model = value
-                        self.tasks[id] = updatedTask
-                        self.notifyTaskListUpdate()
-                        self.notifySingleTaskUpdate(task: updatedTask)
-                    }
+                if let json = try? JSON(data: businessData) {
+                    task.model = json.toModel(Model.self)
                 }
+            case .failure:
+                task.state = .failed
             }
         }
-        if !completed && task.state != .cancelled {
-            task.state = .failed
-        }
+
         tasks[id] = task
         notifyTaskListUpdate()
         notifyProgressAndBatchState()

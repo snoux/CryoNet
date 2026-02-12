@@ -55,7 +55,7 @@ public struct RequestModel {
         applyBasicURL: Bool = true,
         method: HTTPMethod = .post,
         encoding: CryoParameterEncoder = .jsonDefault,
-        overtime: Double = 30,
+        overtime: Double = 0,
         explain: String = ""
     ) {
         self.path = path
