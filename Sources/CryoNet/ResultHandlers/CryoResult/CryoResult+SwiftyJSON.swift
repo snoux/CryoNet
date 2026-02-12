@@ -158,7 +158,7 @@ public extension CryoResult {
     ///   - failed: 失败回调（错误信息字符串）
     /// - Returns: CryoResult
     @discardableResult
-    func interceptJSONModel<T: JSONParseable>(
+    func interceptJSONModel<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
         success: @escaping (T) -> Void,
@@ -305,7 +305,7 @@ public extension CryoResult {
     ///   - failed: 失败回调
     /// - Returns: CryoResult
     @discardableResult
-    func interceptJSONModelArray<T: JSONParseable>(
+    func interceptJSONModelArray<T: JSONParseable & Sendable>(
         type: T.Type,
         keyPath: String? = nil,
         success: @escaping ([T]) -> Void,

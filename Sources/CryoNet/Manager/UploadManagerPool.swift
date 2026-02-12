@@ -46,12 +46,10 @@ public actor UploadManagerPool {
     }
 
     /// 移除指定 identifier 的 UploadManager
-    public func removeManager<Model: JSONParseable>(for identifier: String, modelType: Model.Type) {
-        Task{
-            if let manager = managers[identifier] as? UploadManager<Model> {
-                await manager.deleteAllTasks()
-            }
-            managers[identifier] = nil
+    public func removeManager<Model: JSONParseable>(for identifier: String, modelType: Model.Type) async {
+        if let manager = managers[identifier] as? UploadManager<Model> {
+            await manager.deleteAllTasks()
         }
+        managers[identifier] = nil
     }
 }
