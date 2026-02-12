@@ -261,7 +261,7 @@ private extension CryoNet {
         let allHeaders = (config.basicHeaders + headers)
         // 合并去重，后面覆盖前面
         let uniqueHeaders = Dictionary(grouping: allHeaders, by: { $0.name.lowercased() })
-            .map { $0.value.first! }
+            .map { $0.value.last! }
         return HTTPHeaders(uniqueHeaders)
     }
 
@@ -355,6 +355,7 @@ public extension CryoNet {
         let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
+        let timeout = model.overtime > 0 ? model.overtime : config.defaultTimeout
         var adapter: InterceptorAdapter? = nil
         if let _ = userInterceptor{
             adapter = InterceptorAdapter(
@@ -370,7 +371,7 @@ public extension CryoNet {
             encoding: model.encoding.getEncoding(),
             headers: mergedHeaders,
             interceptor: adapter
-        ) { $0.timeoutInterval = model.overtime }
+        ) { $0.timeoutInterval = timeout }
         .validate()
         
         return CryoResult(request: request, interceptor: userInterceptor)
@@ -399,6 +400,16 @@ public extension CryoNet {
         let fullURL = model.fullURL(with: config.basicURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
+        let timeout = model.overtime > 0 ? model.overtime : config.defaultTimeout
+        let requestURL: String = {
+            guard model.method == .get, let parameters, !parameters.isEmpty,
+                  var components = URLComponents(string: fullURL) else {
+                return fullURL
+            }
+            let queryItems = parameters.map { URLQueryItem(name: $0.key, value: "\($0.value)") }
+            components.queryItems = (components.queryItems ?? []) + queryItems
+            return components.url?.absoluteString ?? fullURL
+        }()
 
         // 构造适配器（如果有自定义拦截器）
         var adapter: InterceptorAdapter? = nil
@@ -411,15 +422,21 @@ public extension CryoNet {
         
         // 构造流式请求
         let request = AF.streamRequest(
-            fullURL,
+            requestURL,
             method: model.method,
             headers: mergedHeaders,
             automaticallyCancelOnStreamError: false,
             interceptor: adapter
-        )
+        ) { request in
+            request.timeoutInterval = timeout
+            guard model.method != .get, let parameters else { return }
+            if let body = self.anyToData(parameters) {
+                request.httpBody = body
+            }
+        }
+        
         
         // 返回 CryoStreamResult，只传入 request
         return CryoStreamResult(request: request)
     }
 }
-

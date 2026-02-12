@@ -36,23 +36,19 @@ public actor DownloadManagerPool {
     public func removeManager(
         for identifier: String,
         shouldDeleteFile:Bool = false
-    ) {
-        Task{
-            if let manager = managers[identifier] {
-                await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
-            }
-            managers[identifier] = nil
+    ) async {
+        if let manager = managers[identifier] {
+            await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
         }
+        managers[identifier] = nil
     }
     
     /// 移除全部 DownloadManager
     /// - Parameter shouldDeleteFile: 是否同时删除已下载的文件,默认不删除
-    public func removeAll(shouldDeleteFile:Bool = false) {
-        Task{
-            for manager in allManagers() {
-                await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
-            }
-            managers.removeAll()
+    public func removeAll(shouldDeleteFile:Bool = false) async {
+        for manager in allManagers() {
+            await manager.removeAllTasks(shouldDeleteFile:shouldDeleteFile)
         }
+        managers.removeAll()
     }
 }
