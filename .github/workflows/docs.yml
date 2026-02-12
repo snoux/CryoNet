@@ -13,14 +13,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate Documentation (DocC)
+      - name: Build DocC Archive
         run: |
-          swift package \
-            --allow-writing-to-directory ./docs \
-            generate-documentation \
-            --target CryoNet \
+          xcodebuild docbuild \
+            -scheme CryoNet \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath .derivedData
+
+      - name: Transform DocC for GitHub Pages
+        run: |
+          DOC_ARCHIVE=$(find .derivedData -type d -name 'CryoNet.doccarchive' | head -n 1)
+          if [ -z "$DOC_ARCHIVE" ]; then
+            echo "CryoNet.doccarchive not found"
+            exit 1
+          fi
+          xcrun docc process-archive transform-for-static-hosting \
+            "$DOC_ARCHIVE" \
             --output-path ./docs \
-            --transform-for-static-hosting \
             --hosting-base-path CryoNet
 
       - name: Deploy to GitHub Pages
