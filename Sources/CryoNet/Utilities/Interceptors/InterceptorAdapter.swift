@@ -4,64 +4,32 @@ import SwiftyJSON
 
 // MARK: - 默认响应结构配置
 
-/// 默认响应结构配置，适用于绝大多数标准接口响应。
-///
-/// 用于统一解析接口响应中的业务状态码、消息与数据部分。
+/// 默认响应结构配置，提供闭包默认实现。
 open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendable {
-
-    /// 从 JSON 提取业务数据字段（可重写）
-    open func extractJSON(from json: SwiftyJSON.JSON) -> SwiftyJSON.JSON {
-        json[dataKey]
-    }
-
-    /// 状态码字段名
-    public let codeKey: String
-    /// 消息字段名
-    public let messageKey: String
-    /// 数据字段名
-    public let dataKey: String
-    /// 成功状态码
-    public let successCode: Int
-
-    /// 初始化方法
-    /// - Parameters:
-    ///   - codeKey: 状态码字段名
-    ///   - messageKey: 消息字段名
-    ///   - dataKey: 数据字段名
-    ///   - successCode: 成功状态码
-    public init(
-        codeKey: String = "code",
-        messageKey: String = "msg",
-        dataKey: String = "data",
-        successCode: Int = 200
-    ) {
-        self.codeKey = codeKey
-        self.messageKey = messageKey
-        self.dataKey = dataKey
-        self.successCode = successCode
-    }
+    public init() {}
 
     /// 判断响应是否成功
     /// - Returns: 是否业务成功
     open func isSuccess(json: JSON) -> Bool {
-        return json[codeKey].intValue == successCode
+        true
     }
 
     /// 从 JSON 提取数据（可重写）
     /// - Returns: 提取的数据或错误
     open func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
-        return JSON.extractDataFromJSON(extractJSON(from: json), originalData: originalData)
+        .success(originalData)
     }
 
-    /// 获取配置信息（便于调试）
-    /// - Returns: 当前响应结构配置信息
-    public func getConfigInfo() -> [String: Any] {
-        return [
-            "codeKey": codeKey,
-            "messageKey": messageKey,
-            "dataKey": dataKey,
-            "successCode": successCode
-        ]
+    /// 失败原因提取，可重写
+    open func extractFailureReason(from json: JSON, originalData: Data) -> String? {
+        let commonKeys = ["message", "msg", "error", "reason", "detail"]
+        for key in commonKeys {
+            let value = json[key]
+            if let text = value.string, !text.isEmpty {
+                return text
+            }
+        }
+        return nil
     }
 }
 
@@ -74,58 +42,43 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
 /// ### 使用示例
 /// ```swift
 /// let responseConfig = ResponseConfig(
-///     codeKey: "code",
-///     messageKey: "msg",
-///     dataKey: "",
-///     successCode: 0
-/// ) { json, originalData in
-///     return .success(originalData)
-/// } isSuccess: { json in
-///     json["code"].intValue == 0
-/// }
+///     extractData: { json, originalData in
+///         JSON.extractDataFromJSON(json["result"], originalData: originalData)
+///     },
+///     isSuccess: { json in
+///         json["status"] == "ok"
+///     },
+///     extractFailureReason: { json, _ in
+///         json["message"].string
+///     }
+/// )
 /// ```
 public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
-    public let codeKey: String
-    public let messageKey: String
-    public let dataKey: String
-    public let successCode: Int
-    
     /// 自定义数据提取闭包
     private let extractDataHandler: @Sendable (JSON, Data) -> Result<Data, Error>
     /// 自定义成功判断闭包
     private let isSuccessHandler: @Sendable (JSON) -> Bool
+    /// 自定义失败原因提取闭包
+    private let extractFailureReasonHandler: @Sendable (JSON, Data) -> String?
     
     /// 初始化响应配置
     /// - Parameters:
-    ///   - codeKey: 状态码字段名
-    ///   - messageKey: 消息字段名
-    ///   - dataKey: 数据字段名
-    ///   - successCode: 成功状态码
     ///   - extractData: 可选的自定义数据提取闭包，返回提取的数据或错误。如果为 nil 则使用默认逻辑
     ///   - isSuccess: 可选的自定义成功判断闭包，返回是否成功。如果为 nil 则使用默认逻辑
+    ///   - extractFailureReason: 可选的失败原因提取闭包
     public init(
-        codeKey: String = "code",
-        messageKey: String = "msg",
-        dataKey: String = "data",
-        successCode: Int = 200,
         extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
-        isSuccess: ((JSON) -> Bool)? = nil
+        isSuccess: ((JSON) -> Bool)? = nil,
+        extractFailureReason: ((JSON, Data) -> String?)? = nil
     ) {
-        self.codeKey = codeKey
-        self.messageKey = messageKey
-        self.dataKey = dataKey
-        self.successCode = successCode
-        
         // 如果提供了自定义闭包，使用自定义闭包；否则使用默认逻辑
         if let extractData = extractData {
             self.extractDataHandler = { @Sendable json, originalData in
                 extractData(json, originalData)
             }
         } else {
-            // 默认实现：提取指定字段的 JSON，然后转换为 Data
-            self.extractDataHandler = { @Sendable json, originalData in
-                let extractedJSON = json[dataKey]
-                return JSON.extractDataFromJSON(extractedJSON, originalData: originalData)
+            self.extractDataHandler = { @Sendable _, originalData in
+                .success(originalData)
             }
         }
         
@@ -134,16 +87,27 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
                 isSuccess(json)
             }
         } else {
-            // 默认实现：判断状态码是否等于成功码
-            self.isSuccessHandler = { @Sendable json in
-                json[codeKey].intValue == successCode
+            self.isSuccessHandler = { @Sendable _ in
+                true
             }
         }
-    }
-    
-    /// 从 JSON 提取业务数据字段
-    public func extractJSON(from json: JSON) -> JSON {
-        json[dataKey]
+
+        if let extractFailureReason = extractFailureReason {
+            self.extractFailureReasonHandler = { @Sendable json, originalData in
+                extractFailureReason(json, originalData)
+            }
+        } else {
+            self.extractFailureReasonHandler = { @Sendable json, _ in
+                let commonKeys = ["message", "msg", "error", "reason", "detail"]
+                for key in commonKeys {
+                    let value = json[key]
+                    if let text = value.string, !text.isEmpty {
+                        return text
+                    }
+                }
+                return nil
+            }
+        }
     }
     
     /// 判断响应是否成功
@@ -154,6 +118,11 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
     /// 从 JSON 提取数据
     public func extractData(from json: JSON, originalData: Data) -> Result<Data, Error> {
         extractDataHandler(json, originalData)
+    }
+
+    /// 从 JSON 提取失败原因
+    public func extractFailureReason(from json: JSON, originalData: Data) -> String? {
+        extractFailureReasonHandler(json, originalData)
     }
 }
 
@@ -208,55 +177,38 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         self.responseConfig = responseConfig
     }
 
-    /// 向后兼容老接口的便捷初始化
-    /// - Parameters:
-    ///   - successCode: 成功状态码
-    ///   - successDataKey: 数据字段名
-    public nonisolated convenience init(successCode: Int = 200, successDataKey: String = "data") {
-        self.init(responseConfig: DefaultResponseStructure(
-            codeKey: "code",
-            messageKey: "msg",
-            dataKey: successDataKey,
-            successCode: successCode
-        ))
-    }
-    
     /// 便捷初始化方法，支持闭包式快速配置（推荐使用）
-    ///
-    /// 无需创建类，直接使用闭包配置响应结构，简化配置过程。
-    ///
-    /// - Parameters:
-    ///   - codeKey: 状态码字段名，默认 "code"
-    ///   - messageKey: 消息字段名，默认 "msg"
-    ///   - dataKey: 数据字段名，默认 "data"，传空字符串表示返回完整数据
-    ///   - successCode: 成功状态码，默认 200
-    ///   - extractData: 可选的自定义数据提取闭包，如果为 nil 则使用默认逻辑
-    ///   - isSuccess: 可选的自定义成功判断闭包，如果为 nil 则使用默认逻辑
-    ///
-    /// ### 使用示例
-    /// ```swift
-    /// // 方式1：使用默认逻辑（最简单）
-    /// let interceptor = DefaultInterceptor(
-    ///     codeKey: "code",
-    ///     messageKey: "msg",
-    ///     dataKey: "data",
-    ///     successCode: 0
-    /// )
-    ///
-    /// // 方式2：自定义数据提取和成功判断
-    /// let interceptor = DefaultInterceptor(
-    ///     codeKey: "code",
-    ///     messageKey: "msg",
-    ///     dataKey: "data",
-    ///     successCode: 0,
-    ///     extractData: { json, originalData in
-    ///         return .success(originalData)
-    ///     },
-    ///     isSuccess: { json in
-    ///         json["code"].intValue == successCode // 告诉拦截器，请求是否成功（根据实际业务情况修改）
-    ///     }
-    /// )
-    /// ```
+    public nonisolated convenience init(
+        extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
+        isSuccess: ((JSON) -> Bool)? = nil,
+        extractFailureReason: ((JSON, Data) -> String?)? = nil
+    ) {
+        let config = ResponseConfig(
+            extractData: extractData,
+            isSuccess: isSuccess,
+            extractFailureReason: extractFailureReason
+        )
+        self.init(responseConfig: config)
+    }
+
+    /// 向后兼容老接口的便捷初始化（已废弃）
+    @available(*, deprecated, message: "请改用 init(extractData:isSuccess:extractFailureReason:)")
+    public nonisolated convenience init(successCode: Int = 200, successDataKey: String = "data") {
+        self.init(
+            extractData: { json, originalData in
+                JSON.extractDataFromJSON(json[successDataKey], originalData: originalData)
+            },
+            isSuccess: { json in
+                json["code"].intValue == successCode
+            },
+            extractFailureReason: { json, _ in
+                json["msg"].string
+            }
+        )
+    }
+
+    /// 向后兼容老接口的便捷初始化（已废弃）
+    @available(*, deprecated, message: "请改用 init(extractData:isSuccess:extractFailureReason:)")
     public nonisolated convenience init(
         codeKey: String = "code",
         messageKey: String = "msg",
@@ -265,19 +217,17 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
         isSuccess: ((JSON) -> Bool)? = nil
     ) {
-        let config = ResponseConfig(
-            codeKey: codeKey,
-            messageKey: messageKey,
-            dataKey: dataKey,
-            successCode: successCode,
-            extractData: extractData.map { handler in
-                { json, originalData in handler(json, originalData) }
+        self.init(
+            extractData: extractData ?? { json, originalData in
+                JSON.extractDataFromJSON(json[dataKey], originalData: originalData)
             },
-            isSuccess: isSuccess.map { handler in
-                { json in handler(json) }
+            isSuccess: isSuccess ?? { json in
+                json[codeKey].intValue == successCode
+            },
+            extractFailureReason: { json, _ in
+                json[messageKey].string
             }
         )
-        self.init(responseConfig: config)
     }
 
     /// 请求拦截，自动注入 Bearer Token
@@ -298,6 +248,12 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 
     /// 响应拦截，只返回业务数据 data
+    ///
+    /// 处理顺序：
+    /// 1) 网络层错误优先返回失败；
+    /// 2) HTTP 非 2xx 返回失败；
+    /// 3) HTTP 2xx 后进入业务判断（`isSuccess`）；
+    /// 4) 业务成功返回 `extractData`，业务失败返回 `extractFailureReason`。
     /// - Returns: 业务数据或错误
     open func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
         if let error = response.error {
@@ -317,6 +273,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 
     /// 响应拦截，返回完整响应体
+    ///
+    /// 网络层与 HTTP 层判断规则与 `interceptResponse` 一致。
     /// - Returns: 完整响应体或错误
     open func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
         if let error = response.error {
@@ -336,6 +294,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 
     /// 判断响应是否成功，可重写
+    ///
+    /// - Note: 仅用于业务层判断，网络层与 HTTP 层由上游先行处理。
     /// - Returns: 响应是否业务成功
     open func isResponseSuccess(json: JSON) -> Bool {
         responseConfig.isSuccess(json: json)
@@ -350,15 +310,15 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     }
 
     /// 处理自定义业务错误，可重写
+    ///
+    /// - Note: 失败原因默认来自 `responseConfig.extractFailureReason`，获取不到时使用兜底文案。
     /// - Returns: 错误结果
     open func handleCustomError(
-        code: Int,
         jsonData: Data,
         httpResponse: HTTPURLResponse,
         isCompleteResponse: Bool
     ) -> Result<Data, Error> {
         processErrorResponseData(
-            code: code,
             jsonData: jsonData,
             httpResponse: httpResponse,
             isCompleteResponse: isCompleteResponse
@@ -368,21 +328,9 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// 获取拦截器配置信息
     /// - Returns: 配置信息字典
     public func getInterceptorConfig() -> [String: Any] {
-        var config: [String: Any] = [
+        [
             "interceptorType": String(describing: type(of: self))
         ]
-        if let defaultConfig = responseConfig as? DefaultResponseStructure{
-            config.merge(defaultConfig.getConfigInfo()) { (_, new) in new }
-        }else{
-            let value =  [
-                "codeKey": responseConfig.codeKey,
-                "messageKey": responseConfig.messageKey,
-                "dataKey": responseConfig.dataKey,
-                "successCode": responseConfig.successCode
-            ] as [String : Any]
-            config.merge(value) { (_, new) in new }
-        }
-        return config
     }
 
     // MARK: - 私有实现方法
@@ -399,10 +347,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         do {
             let json = try JSON(data: data)
-            let code = json[responseConfig.codeKey].intValue
             if !isResponseSuccess(json: json) {
                 return handleCustomError(
-                    code: code,
                     jsonData: data,
                     httpResponse: response,
                     isCompleteResponse: true
@@ -427,10 +373,8 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         do {
             let json = try JSON(data: data)
-            let code = json[responseConfig.codeKey].intValue
             if !isResponseSuccess(json: json) {
                 return handleCustomError(
-                    code: code,
                     jsonData: data,
                     httpResponse: response,
                     isCompleteResponse: false
@@ -446,17 +390,19 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// 业务错误组装
     /// - Returns: 错误结果
     private func processErrorResponseData(
-        code: Int,
         jsonData: Data,
         httpResponse: HTTPURLResponse,
         isCompleteResponse: Bool
     ) -> Result<Data, Error> {
         let json = try? JSON(data: jsonData)
-        let message = json?[responseConfig.messageKey].string ?? "拦截器未获取到失败原因"
+        let message = json.flatMap {
+            responseConfig.extractFailureReason(from: $0, originalData: jsonData)
+        } ?? "拦截器未获取到失败原因"
+        let businessCode = httpResponse.statusCode
         var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
             "statusCode": httpResponse.statusCode,
-            "responseCode": code,
+            "responseCode": businessCode,
             "interceptorConfig": getInterceptorConfig(),
             "originalData": jsonData
         ]
@@ -465,7 +411,7 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         }
         return .failure(NSError(
             domain: "BusinessError",
-            code: code,
+            code: businessCode,
             userInfo: userInfo
         ))
     }

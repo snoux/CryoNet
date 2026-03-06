@@ -69,7 +69,7 @@ public struct CryoResult: Sendable {
             }
         }
         if noInterceptor {
-            logContent += "\n[提示] 未配置拦截器，返回原始数据"
+            logContent += "\n[提示] 未配置拦截器，请使用response***获取响应数据"
         }
 
         if let error = error {
@@ -275,12 +275,30 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
+    var interceptorRequiredMessage: String {
+        "未配置拦截器，请使用response***获取响应数据"
+    }
+
     /// 获取拦截器配置信息（用于日志和错误包装）
     func getInterceptorInfo() -> [String: Any]? {
         if let configProvider = interceptor as? InterceptorConfigProvider {
             return configProvider.getInterceptorConfig()
         }
         return nil
+    }
+
+    func failBecauseInterceptorMissing(
+        originalData: Data?,
+        failed: @escaping (String) -> Void
+    ) {
+        failed(interceptorRequiredMessage)
+        debugRequestLog(
+            originalData,
+            error: interceptorRequiredMessage,
+            fromInterceptor: false,
+            interceptorInfo: nil,
+            noInterceptor: true
+        )
     }
 
     /// 拦截器响应并解码单个模型
@@ -300,22 +318,7 @@ extension CryoResult {
             let originalData = response.data
 
             guard let interceptor = self.interceptor else {
-                // 未配置拦截器，直接返回原始数据
-                if let data = originalData {
-                    do {
-                        let model = try JSONDecoder().decode(T.self, from: data)
-                        debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                        success(model)
-                    } catch {
-                        let errorMessage = "未配置拦截器，原始数据解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
-                        debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                    }
-                } else {
-                    let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                }
+                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
                 return
             }
 
@@ -355,21 +358,7 @@ extension CryoResult {
             let originalData = response.data
 
             guard let interceptor = self.interceptor else {
-                if let data = originalData {
-                    do {
-                        let model = try JSONDecoder().decode(T.self, from: data)
-                        debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                        success(model)
-                    } catch {
-                        let errorMessage = "未配置拦截器，原始数据解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
-                        debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                    }
-                } else {
-                    let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                }
+                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
                 return
             }
 
@@ -408,21 +397,7 @@ extension CryoResult {
             let originalData = response.data
 
             guard let interceptor = self.interceptor else {
-                if let data = originalData {
-                    do {
-                        let json = try JSON(data: data)
-                        debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                        success(json)
-                    } catch {
-                        let errorMessage = "未配置拦截器，原始数据JSON解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
-                        debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                    }
-                } else {
-                    let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                }
+                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
                 return
             }
 
@@ -462,21 +437,7 @@ extension CryoResult {
             let originalData = response.data
 
             guard let interceptor = self.interceptor else {
-                if let data = originalData {
-                    do {
-                        let modelArray = try JSONDecoder().decode([T].self, from: data)
-                        debugRequestLog(data, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                        success(modelArray)
-                    } catch {
-                        let errorMessage = "未配置拦截器，原始数据数组解析失败: \(error.localizedDescription)"
-                        failed(errorMessage)
-                        debugRequestLog(data, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                    }
-                } else {
-                    let errorMessage = "未配置拦截器，且无原始数据"
-                    failed(errorMessage)
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: false, interceptorInfo: nil, noInterceptor: true)
-                }
+                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
                 return
             }
 

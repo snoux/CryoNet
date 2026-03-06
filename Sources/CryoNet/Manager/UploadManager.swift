@@ -160,16 +160,8 @@ public struct UploadTask<Model: JSONParseable>: Identifiable, Equatable {
 ///
 /// // 配置响应结构（支持深层数据）
 /// final class UploadResponseConfig: DefaultResponseStructure, @unchecked Sendable {
-///     init(){
-///         super.init(
-///             codeKey: "status",
-///             messageKey: "success",
-///             dataKey: "data",
-///             successCode: 200
-///         )
-///     }
 ///     override func extractData(from json: JSON, originalData: Data) -> Result<Data, any Error> {
-///         let targetData = json[dataKey]
+///         let targetData = json["data"]
 ///         if !targetData.exists() || targetData.type == .null { return .success(originalData) }
 ///         do {
 ///             let validData: Data = try targetData.rawData()
@@ -178,8 +170,11 @@ public struct UploadTask<Model: JSONParseable>: Identifiable, Equatable {
 ///             return .failure(error)
 ///         }
 ///     }
+///     override func extractFailureReason(from json: JSON, originalData: Data) -> String? {
+///         json["success"].string
+///     }
 ///     override func isSuccess(json: JSON) -> Bool {
-///         return json[codeKey].intValue == successCode
+///         return json["status"].intValue == 200
 ///     }
 /// }
 /// ```

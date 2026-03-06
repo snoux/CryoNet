@@ -3,7 +3,7 @@
 基于 Alamofire + SwiftyJSON 的 Swift 网络层封装，适用于 iOS/macOS/tvOS/watchOS。
 
 `CryoNet` 主要做了三件事：
-- 统一请求配置（`basicURL`、默认 `headers`、超时、token、拦截器）
+- 统一请求配置（`baseURL`、默认 `headers`、超时、token、拦截器）
 - 统一响应处理（`Data` / `JSON` / `Decodable` / `JSONParseable`）
 - 提供独立的批量上传与下载管理器（并发、队列、状态回调）
 
@@ -27,24 +27,24 @@ https://github.com/snoux/CryoNet.git
 import CryoNet
 
 let cryoNet = CryoNet { config in
-    config.basicURL = "https://api.example.com"
+    config.baseURL = "https://api.example.com"
     config.defaultTimeout = 30
     config.basicHeaders = [
         .init(name: "Content-Type", value: "application/json")
     ]
     config.tokenManager = DefaultTokenManager()
     config.interceptor = DefaultInterceptor(
-        codeKey: "code",
-        messageKey: "msg",
-        dataKey: "data",
-        successCode: 0,
         extractData: { json, originalData in
-            // 自定义数据提取逻辑：返回完整数据
-            return .success(originalData)
+            // 自定义数据提取逻辑：提取业务字段
+            JSON.extractDataFromJSON(json["data"], originalData: originalData)
         },
         isSuccess: { json in
             // 自定义成功判断逻辑
             return json["code"].intValue == 0
+        },
+        extractFailureReason: { json, _ in
+            // 自定义失败原因提取逻辑
+            json["msg"].string
         }
     )
 }
@@ -115,23 +115,92 @@ cryoNet.request(API.newsList)
     } failed: { message in
         print(message)
     }
+
+// 注意：如果未配置拦截器，intercept*** 会直接失败，
+// 错误信息为：未配置拦截器，请使用response***获取响应数据
 ```
 
 ## 拦截器与 Token
+
+### 默认行为说明（重要）
+
+- 网络层错误优先：如超时、断网、DNS/TLS、请求取消等，直接返回网络错误。
+- HTTP 层其次：HTTP 非 `2xx` 直接失败，不进入业务 `isSuccess` 判断。
+- 业务层最后：仅在 HTTP `2xx` 且 JSON 可解析时，才会执行 `isSuccess`。
+- `isSuccess` 默认值：未配置时默认返回 `true`（即业务层默认成功）。
+- `extractFailureReason` 调用时机：仅在 `isSuccess == false` 时调用。
+- `extractFailureReason` 默认逻辑：尝试 `message/msg/error/reason/detail`，取不到使用兜底文案。
+- 未配置拦截器时：所有 `intercept***` 系列接口直接失败，提示使用 `response***` 系列接口。
 
 ### 便捷配置（推荐）
 
 ```swift
 let interceptor = DefaultInterceptor(
-    codeKey: "code",
-    messageKey: "message",
-    dataKey: "result",
-    successCode: 200,
+    extractData: { json, originalData in
+        JSON.extractDataFromJSON(json["result"], originalData: originalData)
+    },
     isSuccess: { json in
-        // 告诉拦截器，响应的数据结构中code字段数据为200时表示请求成功
+        // 告诉拦截器，响应的数据结构中 code 字段为 200 时表示请求成功
         json["code"].intValue == 200
+    },
+    extractFailureReason: { json, _ in
+        json["message"].string
     }
 )
+```
+
+### 不使用 `DefaultInterceptor` 时如何配置
+
+你可以直接实现 `RequestInterceptorProtocol`，完全自定义请求与响应处理逻辑。
+
+你也可以继承 `DefaultInterceptor`，只重写你关心的部分（例如 `isResponseSuccess`、`extractSuccessData`、`handleCustomError`）。
+
+```swift
+import Alamofire
+import CryoNet
+
+final class MyCustomInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
+    func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest {
+        var request = urlRequest
+        if let token = await tokenManager.getToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
+        if let error = response.error { return .failure(error) } // 网络层优先
+        guard let httpResponse = response.response, 200..<300 ~= httpResponse.statusCode else {
+            return .failure(NSError(domain: "HTTPError", code: response.response?.statusCode ?? -1))
+        }
+        guard let data = response.data else {
+            return .failure(NSError(domain: "DataError", code: -1))
+        }
+        // 这里可按你的业务结构自行判断成功/失败并返回最终 Data
+        return .success(data)
+    }
+
+    func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
+        interceptResponse(response)
+    }
+}
+```
+
+继承 `DefaultInterceptor` 示例：
+
+```swift
+import CryoNet
+import SwiftyJSON
+
+final class MyBusinessInterceptor: DefaultInterceptor, @unchecked Sendable {
+    override func isResponseSuccess(json: JSON) -> Bool {
+        json["status"] == "ok"
+    }
+
+    override func extractSuccessData(from json: JSON, data: Data) -> Result<Data, Error> {
+        JSON.extractDataFromJSON(json["result"], originalData: data)
+    }
+}
 ```
 
 ### 自定义 Token 管理
@@ -299,7 +368,17 @@ let uploadManager = UploadManager<UploadModel>(
     uploadURL: URL(string: "https://api.example.com/upload")!,
     parameters: ["key": "xxx"],
     maxConcurrentUploads: 3,
-    interceptor: DefaultInterceptor(codeKey: "code", messageKey: "msg", dataKey: "data", successCode: 0)
+    interceptor: DefaultInterceptor(
+        extractData: { json, originalData in
+            JSON.extractDataFromJSON(json["data"], originalData: originalData)
+        },
+        isSuccess: { json in
+            json["code"].intValue == 0
+        },
+        extractFailureReason: { json, _ in
+            json["msg"].string
+        }
+    )
 )
 
 await uploadManager
@@ -336,10 +415,10 @@ print(active.count, completed.count, failed.count, cancelled.count)
 
 ## 说明
 
-- `RequestModel.applyBasicURL = false` 时不会拼接 `basicURL`。
+- `RequestModel.applyBasicURL = false` 时不会拼接 `baseURL`。
 - 超时优先级：`RequestModel.overtime > 0` 时使用请求级超时；否则回退到 `CryoNetConfiguration.defaultTimeout`。
 - 批量上传/下载的 URL、headers、并发配置在各自 manager 内独立维护。
-- 默认 `DefaultInterceptor` 会按 `codeKey/messageKey/dataKey` 解析业务结构。
+- 默认 `DefaultInterceptor` 不强依赖固定字段，建议通过 `isSuccess/extractData/extractFailureReason` 声明业务结构。
 - 调试日志主要在 `DEBUG` 下输出。
 - `DownloadManagerPool.removeManager/removeAll` 与 `UploadManagerPool.removeManager` 为 `async` 方法，调用时需要 `await`，返回时清理已完成。
 

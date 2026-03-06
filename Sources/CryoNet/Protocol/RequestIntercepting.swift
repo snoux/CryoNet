@@ -7,6 +7,10 @@ import Alamofire
 ///
 /// 可自定义实现用于自动注入 Token、处理业务错误、结构转换等。
 ///
+/// - Note:
+///   - 若不使用 `DefaultInterceptor`，可直接实现本协议并传入 `CryoNetConfiguration.interceptor`。
+///   - 建议在 `interceptResponse` 中保持“网络层错误优先、HTTP 非 2xx 失败优先”的处理顺序。
+///
 /// ### 使用示例
 /// ```swift
 /// class MyInterceptor: RequestInterceptorProtocol {

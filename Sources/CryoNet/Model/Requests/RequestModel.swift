@@ -18,7 +18,7 @@ import Alamofire
 /// ```
 ///
 /// - Note:
-///   - `applyBasicURL` 为 true 时，path 会自动与配置的 basicURL 拼接。
+///   - `applyBasicURL` 为 true 时，path 会自动与配置的 baseURL 拼接。
 ///   - 支持自定义 CryoParameterEncoder，便于特殊接口适配。
 ///
 /// - SeeAlso: ``CryoParameterEncoder``, ``CryoNet/request(_:parameters:headers:interceptor:)``
@@ -27,7 +27,7 @@ public struct RequestModel {
     /// api 接口路径（如 "/user/info"）
     var path: String
     
-    /// 是否拼接 BasicURL（true 时使用配置的基础 URL 拼接 path）
+    /// 是否拼接 baseURL（true 时使用配置的基础 URL 拼接 path）
     var applyBasicURL: Bool = true
 
     /// HTTP 请求方式（GET、POST、PUT 等）
@@ -66,11 +66,11 @@ public struct RequestModel {
         self.explain = explain
     }
     
-    /// 获取完整 URL（自动拼接 BasicURL 或原样返回）
-    /// - Parameter basicURL: 基础 URL
+    /// 获取完整 URL（自动拼接 baseURL 或原样返回）
+    /// - Parameter baseURL: 基础 URL
     /// - Returns: 拼接后的完整请求 URL
-    public func fullURL(with basicURL: String) -> String {
-        applyBasicURL ? basicURL + path : path
+    public func fullURL(with baseURL: String) -> String {
+        applyBasicURL ? baseURL + path : path
     }
 }
 

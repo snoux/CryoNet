@@ -14,7 +14,7 @@ import SwiftyJSON
 /// 以下示例展示了如何创建一个自定义的 `CryoNetConfiguration` 实例：
 /// ```swift
 /// let customConfig = CryoNetConfiguration(
-///     basicURL: "https://api.example.com",
+///     baseURL: "https://api.example.com",
 ///     basicHeaders: [HTTPHeader(name: "Authorization", value: "Bearer your_token")],
 ///     defaultTimeout: 60,
 ///     tokenManager: CustomTokenManager(), // 假设您有一个自定义的Token管理器
@@ -25,14 +25,14 @@ import SwiftyJSON
 /// ```
 ///
 /// - Note:
-///   - 配置后，所有通过 `CryoNet` 实例发送的请求都将默认拼接 `basicURL` 和 `basicHeaders`。
+///   - 配置后，所有通过 `CryoNet` 实例发送的请求都将默认拼接 `baseURL` 和 `basicHeaders`。
 ///   - `TokenManagerProtocol` 和 `RequestInterceptorProtocol` 允许您实现自定义的认证和请求处理逻辑。
 ///
 /// - SeeAlso: ``CryoNet``, ``TokenManagerProtocol``, ``RequestInterceptorProtocol``
 @available(macOS 10.15, iOS 13, *)
 public struct CryoNetConfiguration: Sendable {
     /// 基础URL
-    public var basicURL: String
+    public var baseURL: String
     /// 基础请求头
     public var basicHeaders: [HTTPHeader]
     /// 默认超时时间（秒）
@@ -45,7 +45,7 @@ public struct CryoNetConfiguration: Sendable {
     /// 初始化一个新的 `CryoNetConfiguration` 实例。
     ///
     /// - Parameters:
-    ///   - basicURL: 基础请求地址。默认为空字符串。
+    ///   - baseURL: 基础请求地址。默认为空字符串。
     ///   - basicHeaders: 基础请求头数组。默认为 `[HTTPHeader(name: "Content-Type", value: "application/json")]`。
     ///   - defaultTimeout: 默认超时时间（秒）。默认为 30 秒。
     ///   - tokenManager: 用于管理 Token 的实例。默认为 ``DefaultTokenManager``()。
@@ -58,18 +58,18 @@ public struct CryoNetConfiguration: Sendable {
     ///
     /// // 自定义部分参数
     /// let customConfig = CryoNetConfiguration(
-    ///     basicURL: "https://api.my-app.com",
+    ///     baseURL: "https://api.my-app.com",
     ///     defaultTimeout: 45
     /// )
     /// ```
     public init(
-        basicURL: String = "",
+        baseURL: String = "",
         basicHeaders: [HTTPHeader] = [HTTPHeader(name: "Content-Type", value: "application/json")],
         defaultTimeout: TimeInterval = 30,
         tokenManager: TokenManagerProtocol = DefaultTokenManager(),
         interceptor: RequestInterceptorProtocol? = nil
     ) {
-        self.basicURL = basicURL
+        self.baseURL = baseURL
         self.basicHeaders = basicHeaders
         self.defaultTimeout = defaultTimeout
         self.tokenManager = tokenManager
@@ -94,13 +94,13 @@ public struct CryoNetConfiguration: Sendable {
 ///
 /// 使用自定义配置初始化 CryoNet
 /// ```swift
-/// let customConfig = CryoNetConfiguration(basicURL: "https://api.example.com")
+/// let customConfig = CryoNetConfiguration(baseURL: "https://api.example.com")
 /// let customCryoNet = CryoNet(configuration: customConfig)
 /// ```
 /// 使用闭包进行便捷配置
 /// ```swift
 /// let anotherCryoNet = CryoNet { config in
-///     config.basicURL = "https://api.another-example.com"
+///     config.baseURL = "https://api.another-example.com"
 ///     config.defaultTimeout = 40
 /// }
 /// ```
@@ -130,7 +130,7 @@ public class CryoNet {
     ///
     /// ### 使用示例
     /// ```swift
-    /// let customConfig = CryoNetConfiguration(basicURL: "https://api.example.com")
+    /// let customConfig = CryoNetConfiguration(baseURL: "https://api.example.com")
     /// let cryoNet = CryoNet(configuration: customConfig)
     /// ```
     ///
@@ -148,7 +148,7 @@ public class CryoNet {
     /// ### 使用示例
     /// ```swift
     /// let cryoNet = CryoNet { config in
-    ///     config.basicURL = "https://api.my-app.com"
+    ///     config.baseURL = "https://api.my-app.com"
     ///     config.defaultTimeout = 45
     /// }
     /// ```
@@ -170,7 +170,7 @@ public class CryoNet {
     /// ### 使用示例
     /// ```swift
     /// let currentConfig = cryoNet.getConfiguration()
-    /// print("当前基础URL: \(currentConfig.basicURL)")
+    /// print("当前基础URL: \(currentConfig.baseURL)")
     /// ```
     public func getConfiguration() -> CryoNetConfiguration {
         self.configurationActor
@@ -323,7 +323,7 @@ public extension CryoNet {
     /// ```swift
     /// // 发起一个 GET 请求获取用户列表
     /// let getUsers = RequestModel(
-    ///    path: "/getUsers",  // 设置拼接路径地址 会与BasicURL进行拼接
+    ///    path: "/getUsers",  // 设置拼接路径地址，会与 baseURL 进行拼接
     ///    method: .get,   // 请求方式
     /// )
     /// cryoNet.request(getUsers, parameters: ["page": 1, "limit": 10])
@@ -333,7 +333,7 @@ public extension CryoNet {
     ///
     /// // 发起一个 POST 请求创建新用户
     /// let createUser = RequestModel(
-    ///    path: "/createUser",  // 设置拼接路径地址 会与BasicURL进行拼接
+    ///    path: "/createUser",  // 设置拼接路径地址，会与 baseURL 进行拼接
     ///    method: .post,   // 请求方式
     /// )
     /// let newUser = ["name": "John Doe", "email": "john.doe@example.com"]
@@ -352,7 +352,7 @@ public extension CryoNet {
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoResult {
         let config = self.getConfiguration()
-        let fullURL = model.fullURL(with: config.basicURL)
+        let fullURL = model.fullURL(with: config.baseURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
         let timeout = model.overtime > 0 ? model.overtime : config.defaultTimeout
@@ -397,7 +397,7 @@ public extension CryoNet {
         interceptor: RequestInterceptorProtocol? = nil
     ) -> CryoStreamResult {
         let config = getConfiguration()
-        let fullURL = model.fullURL(with: config.basicURL)
+        let fullURL = model.fullURL(with: config.baseURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
         let timeout = model.overtime > 0 ? model.overtime : config.defaultTimeout
