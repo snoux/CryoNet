@@ -13,6 +13,7 @@
 
 ```swift
 https://github.com/snoux/CryoNet.git
+https://gitee.com/snoux/CryoNet.git（备用地址）
 ```
 
 依赖：
