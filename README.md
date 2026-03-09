@@ -13,7 +13,11 @@
 
 ```swift
 https://github.com/snoux/CryoNet.git
-https://gitee.com/snoux/CryoNet.git（备用地址）
+```
+
+备用地址
+```swift
+https://gitee.com/snoux/CryoNet.git
 ```
 
 依赖：
@@ -496,3 +500,5 @@ print(active.count, completed.count, failed.count, cancelled.count)
 
 - 项目地址：https://github.com/snoux/CryoNet
 - 文档地址：https://snoux.github.io/CryoNet
+- 简单Demo: https://gitee.com/snoux/cryo-net-demo.git
+
