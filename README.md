@@ -50,6 +50,12 @@ let cryoNet = CryoNet { config in
 }
 ```
 
+你也可以在初始化 `CryoNet` 时不配置全局拦截器。
+这种情况下：
+- 普通 `response***` 系列仍可正常使用。
+- 如果要使用 `intercept***` 系列，请在 `request(..., interceptor:)` 为该请求显式传入拦截器。
+- 未配置拦截器却调用 `intercept***` 时会直接失败（错误信息：`未配置拦截器，请使用response***获取响应数据`）。
+
 ### 2) 定义请求
 
 ```swift
@@ -192,6 +198,7 @@ cryoNet.request(API.newsList)
 - `isSuccess` 默认值：未配置时默认返回 `true`（即业务层默认成功）。
 - `extractFailureReason` 调用时机：仅在 `isSuccess == false` 时调用。
 - `extractFailureReason` 默认逻辑：尝试 `message/msg/error/reason/detail`，取不到使用兜底文案。
+- 拦截器优先级：`request(..., interceptor:)` 传入的请求级拦截器优先；未传时回退到 `CryoNetConfiguration.interceptor`。
 - 未配置拦截器时：所有 `intercept***` 系列接口直接失败，提示使用 `response***` 系列接口。
 
 ### 便捷配置（推荐）
