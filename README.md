@@ -194,20 +194,25 @@ Task {
         await MainActor.run {
             self.newsList = list
         }
-    } catch let failure as CryoFailure {
+    } catch {
+        guard let failure = error as? CryoFailure else {
+            print(error.localizedDescription)
+            return
+        }
+
         switch failure.kind {
         case .authenticationExpired:
             print("登录状态已失效")
+
         case .http:
             print("HTTP 错误：\(failure.statusCode ?? -1)")
+
         case .business:
             print("业务错误：\(failure.businessCode ?? -1)")
+
         default:
             print(failure.message)
         }
-    } catch {
-        // 防御性处理非 CryoNet 产生的其他错误。
-        print(error.localizedDescription)
     }
 }
 ```
