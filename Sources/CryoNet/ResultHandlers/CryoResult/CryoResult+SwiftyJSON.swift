@@ -182,17 +182,36 @@ public extension CryoResult {
                         success(model)
                     } else {
                         let errorMessage = "SwiftyJSON转换模型失败，keyPath: \(keyPath ?? "nil")"
-                        failed(errorMessage)
+                        let failure = CryoFailure(
+                            kind: .decoding,
+                            message: errorMessage,
+                            statusCode: response.response?.statusCode,
+                            responseData: data
+                        )
+                        self.emitFailure(failure, request: response.request) { failed($0.message) }
                         debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     }
                 } catch {
                     let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
+                    self.emitLegacyFailure(
+                        error,
+                        response: response.response,
+                        responseData: data,
+                        request: response.request,
+                        preferredKind: .decoding,
+                        failed: failed
+                    )
                     debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
                 let errorMessage = error.localizedDescription
-                failed(errorMessage)
+                self.emitLegacyFailure(
+                    error,
+                    response: response.response,
+                    responseData: originalData,
+                    request: response.request,
+                    failed: failed
+                )
                 if let originalData = originalData {
                     debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
                 } else {
@@ -201,6 +220,37 @@ public extension CryoResult {
             }
         }
         return self
+    }
+
+    /// 从拦截器获取 SwiftyJSON 对象并转换为模型，失败时返回统一失败信息。
+    ///
+    /// - Parameters:
+    ///   - type: 模型类型，需实现 `JSONParseable` 和 `Sendable`。
+    ///   - keyPath: 可选 JSON 路径；为 `nil` 时使用当前响应数据。
+    ///   - success: 模型解析成功回调。
+    ///   - failure: 当前请求的统一失败回调；全局 `handleFailure` 会先执行。
+    /// - Returns: 当前 `CryoResult`，可继续链式调用。
+    @discardableResult
+    func interceptJSONModel<T: JSONParseable & Sendable>(
+        type: T.Type,
+        keyPath: String? = nil,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> CryoResult {
+        interceptJSONValue(
+            transform: { json in
+                guard let model = json.toModel(type, keyPath: keyPath) else {
+                    throw NSError(
+                        domain: "JSONModelError",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "SwiftyJSON转换模型失败，keyPath: \(keyPath ?? "nil")"]
+                    )
+                }
+                return model
+            },
+            success: success,
+            failure: failure
+        )
     }
 
     /// 从拦截器获取 SwiftyJSON 对象，并使用自定义闭包解析为模型
@@ -234,17 +284,36 @@ public extension CryoResult {
                         success(model)
                     } else {
                         let errorMessage = "SwiftyJSON自定义解析模型失败"
-                        failed(errorMessage)
+                        let failure = CryoFailure(
+                            kind: .decoding,
+                            message: errorMessage,
+                            statusCode: response.response?.statusCode,
+                            responseData: data
+                        )
+                        self.emitFailure(failure, request: response.request) { failed($0.message) }
                         debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                     }
                 } catch {
                     let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
+                    self.emitLegacyFailure(
+                        error,
+                        response: response.response,
+                        responseData: data,
+                        request: response.request,
+                        preferredKind: .decoding,
+                        failed: failed
+                    )
                     debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
                 }
             case .failure(let error):
                 let errorMessage = error.localizedDescription
-                failed(errorMessage)
+                self.emitLegacyFailure(
+                    error,
+                    response: response.response,
+                    responseData: originalData,
+                    request: response.request,
+                    failed: failed
+                )
                 if let originalData = originalData {
                     debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
                 } else {
@@ -253,6 +322,35 @@ public extension CryoResult {
             }
         }
         return self
+    }
+
+    /// 从拦截器获取 SwiftyJSON 对象，使用自定义闭包转换为模型并返回统一失败信息。
+    ///
+    /// - Parameters:
+    ///   - parser: 将 JSON 转换为模型的自定义闭包。
+    ///   - success: 模型解析成功回调。
+    ///   - failure: 当前请求的统一失败回调；全局 `handleFailure` 会先执行。
+    /// - Returns: 当前 `CryoResult`，可继续链式调用。
+    @discardableResult
+    func interceptJSONModel<T>(
+        parser: @escaping (JSON) -> T?,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> CryoResult {
+        interceptJSONValue(
+            transform: { json in
+                guard let model = json.toModel(parser: parser) else {
+                    throw NSError(
+                        domain: "JSONModelError",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "SwiftyJSON自定义解析模型失败"]
+                    )
+                }
+                return model
+            },
+            success: success,
+            failure: failure
+        )
     }
 
     /// 从拦截器获取 SwiftyJSON 对象，并直接转换为模型数组
@@ -270,38 +368,33 @@ public extension CryoResult {
         success: @escaping ([T]) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
-            let interceptorInfo = self.getInterceptorInfo()
-            let originalData = response.data
+        interceptJSONValue(
+            transform: { $0.toModelArray(type, keyPath: keyPath) },
+            success: success,
+            failure: { failed($0.message) }
+        )
+    }
 
-            guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
-                return
-            }
-
-            switch interceptor.interceptResponse(response) {
-            case .success(let data):
-                do {
-                    let json = try JSON(data: data)
-                    let modelArray = json.toModelArray(type, keyPath: keyPath)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(modelArray)
-                } catch {
-                    let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            }
-        }
-        return self
+    /// 从拦截器获取 SwiftyJSON 对象并转换为模型数组，失败时返回统一失败信息。
+    ///
+    /// - Parameters:
+    ///   - type: 数组元素类型，需实现 `JSONParseable` 和 `Sendable`。
+    ///   - keyPath: 可选 JSON 路径；为 `nil` 时使用当前响应数据。
+    ///   - success: 模型数组解析成功回调。
+    ///   - failure: 当前请求的统一失败回调；全局 `handleFailure` 会先执行。
+    /// - Returns: 当前 `CryoResult`，可继续链式调用。
+    @discardableResult
+    func interceptJSONModelArray<T: JSONParseable & Sendable>(
+        type: T.Type,
+        keyPath: String? = nil,
+        success: @escaping ([T]) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> CryoResult {
+        interceptJSONValue(
+            transform: { $0.toModelArray(type, keyPath: keyPath) },
+            success: success,
+            failure: failure
+        )
     }
 
     /// 从拦截器获取 SwiftyJSON 对象，并用自定义闭包解析为模型数组
@@ -319,35 +412,96 @@ public extension CryoResult {
         success: @escaping ([T]) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> CryoResult {
-        self.request.response { response in
+        interceptJSONValue(
+            transform: { $0.toModelArray(keyPath: keyPath, parser: parser) },
+            success: success,
+            failure: { failed($0.message) }
+        )
+    }
+
+    /// 从拦截器获取 SwiftyJSON 对象，使用自定义闭包转换为数组并返回统一失败信息。
+    ///
+    /// - Parameters:
+    ///   - keyPath: 可选 JSON 路径；为 `nil` 时使用当前响应数据。
+    ///   - parser: 将单个 JSON 元素转换为模型的自定义闭包。
+    ///   - success: 模型数组解析成功回调。
+    ///   - failure: 当前请求的统一失败回调；全局 `handleFailure` 会先执行。
+    /// - Returns: 当前 `CryoResult`，可继续链式调用。
+    @discardableResult
+    func interceptJSONModelArray<T>(
+        keyPath: String? = nil,
+        parser: @escaping (JSON) -> T?,
+        success: @escaping ([T]) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> CryoResult {
+        interceptJSONValue(
+            transform: { $0.toModelArray(keyPath: keyPath, parser: parser) },
+            success: success,
+            failure: failure
+        )
+    }
+
+    /// 执行拦截后的 SwiftyJSON 转换，并将所有失败统一为 `CryoFailure`。
+    private func interceptJSONValue<T>(
+        transform: @escaping (JSON) throws -> T,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> CryoResult {
+        request.response { response in
             let interceptorInfo = self.getInterceptorInfo()
             let originalData = response.data
 
             guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
+                let missingFailure = CryoFailure(
+                    kind: .interceptorMissing,
+                    message: self.interceptorRequiredMessage,
+                    responseData: originalData
+                )
+                self.emitFailure(missingFailure, request: response.request, localFailure: failure)
+                self.debugRequestLog(
+                    originalData,
+                    error: self.interceptorRequiredMessage,
+                    fromInterceptor: false,
+                    interceptorInfo: nil,
+                    noInterceptor: true
+                )
                 return
             }
 
             switch interceptor.interceptResponse(response) {
             case .success(let data):
                 do {
-                    let json = try JSON(data: data)
-                    let modelArray = json.toModelArray(keyPath: keyPath, parser: parser)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(modelArray)
+                    let value = try transform(JSON(data: data))
+                    self.debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                    success(value)
                 } catch {
-                    let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
+                    let standardizedFailure = CryoFailure.wrapping(
+                        error,
+                        response: response.response,
+                        responseData: data,
+                        preferredKind: .decoding
+                    )
+                    self.emitFailure(standardizedFailure, request: response.request, localFailure: failure)
+                    self.debugRequestLog(
+                        data,
+                        error: "JSON解析失败: \(error.localizedDescription)",
+                        fromInterceptor: true,
+                        interceptorInfo: interceptorInfo
+                    )
                 }
             case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
+                let standardizedFailure = CryoFailure.wrapping(
+                    error,
+                    response: response.response,
+                    responseData: originalData
+                )
+                self.emitFailure(standardizedFailure, request: response.request, localFailure: failure)
+                self.debugRequestLog(
+                    originalData,
+                    error: error.localizedDescription,
+                    fromInterceptor: true,
+                    interceptorInfo: interceptorInfo
+                )
             }
         }
         return self
@@ -440,14 +594,14 @@ public extension CryoResult {
     /// - Parameters:
     ///   - type: 模型类型
     ///   - keyPath: 可选，JSON路径
-    /// - Throws: 错误处理
+    /// - Throws: `CryoFailure`，包含 HTTP、业务、网络或解析失败的结构化信息。
     /// - Returns: 模型
     func interceptJSONModelAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             interceptJSONModel(type: type, keyPath: keyPath) { model in
                 continuation.resume(returning: model)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
+            } failure: { failure in
+                continuation.resume(throwing: failure)
             }
         }
     }
@@ -456,14 +610,14 @@ public extension CryoResult {
     ///
     /// - Parameters:
     ///   - parser: 自定义解析闭包
-    /// - Throws: 错误处理
+    /// - Throws: `CryoFailure`，包含 HTTP、业务、网络或解析失败的结构化信息。
     /// - Returns: 模型
     func interceptJSONModelAsync<T>(parser: @escaping (JSON) -> T?) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             interceptJSONModel(parser: parser) { model in
                 continuation.resume(returning: model)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
+            } failure: { failure in
+                continuation.resume(throwing: failure)
             }
         }
     }
@@ -473,14 +627,14 @@ public extension CryoResult {
     /// - Parameters:
     ///   - type: 模型类型
     ///   - keyPath: 可选，JSON路径
-    /// - Throws: 错误处理
+    /// - Throws: `CryoFailure`，包含 HTTP、业务、网络或解析失败的结构化信息。
     /// - Returns: 模型数组
     func interceptJSONModelArrayAsync<T: JSONParseable>(_ type: T.Type, keyPath: String? = nil) async throws -> [T] {
         try await withCheckedThrowingContinuation { continuation in
             interceptJSONModelArray(type: type, keyPath: keyPath) { arr in
                 continuation.resume(returning: arr)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
+            } failure: { failure in
+                continuation.resume(throwing: failure)
             }
         }
     }
@@ -490,14 +644,14 @@ public extension CryoResult {
     /// - Parameters:
     ///   - keyPath: 可选，JSON路径
     ///   - parser: 自定义解析闭包
-    /// - Throws: 错误处理
+    /// - Throws: `CryoFailure`，包含 HTTP、业务、网络或解析失败的结构化信息。
     /// - Returns: 模型数组
     func interceptJSONModelArrayAsync<T>(keyPath: String? = nil, parser: @escaping (JSON) -> T?) async throws -> [T] {
         try await withCheckedThrowingContinuation { continuation in
             interceptJSONModelArray(keyPath: keyPath, parser: parser) { arr in
                 continuation.resume(returning: arr)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
+            } failure: { failure in
+                continuation.resume(throwing: failure)
             }
         }
     }

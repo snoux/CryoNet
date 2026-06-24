@@ -28,6 +28,12 @@ public protocol TokenManagerProtocol: Sendable {
 /// 线程安全的 token 存储 Actor，封装单实例 Token。
 actor TokenStorageActor {
     private var token: String?
+
+    /// 创建 Token 存储。
+    /// - Parameter token: 初始 Token。
+    init(token: String? = nil) {
+        self.token = token
+    }
     
     /// 获取 token
     func get() -> String? {

@@ -21,17 +21,22 @@ public struct CryoResult: Sendable {
     public let request: DataRequest
     /// 请求拦截器 (可选)
     let interceptor: RequestInterceptorProtocol?
+    /// 请求首次适配时的认证会话上下文。
+    let authenticationContext: RequestAuthenticationContext?
 
     /// 初始化
     /// - Parameters:
     ///   - request: 数据请求对象
     ///   - interceptor: 拦截器
+    ///   - authenticationContext: 可选认证会话上下文。
     init(
         request: DataRequest,
-        interceptor: RequestInterceptorProtocol? = nil
+        interceptor: RequestInterceptorProtocol? = nil,
+        authenticationContext: RequestAuthenticationContext? = nil
     ){
         self.request = request
         self.interceptor = interceptor
+        self.authenticationContext = authenticationContext
     }
 
     /// 调试请求日志（仅 DEBUG 模式打印）
@@ -101,6 +106,16 @@ public struct CryoResult: Sendable {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
+    /// 将旧字符串失败回调包装为可抛出错误，用于兼容 SwiftyJSON 异步 API。
+    /// - Parameter error: 旧 API 返回的错误文案。
+    /// - Returns: 可由 async API 抛出的错误。
+    internal func handleInterceptorError(_ error: String) -> Error {
+        InterceptorError(
+            message: error,
+            interceptorInfo: getInterceptorInfo()
+        )
+    }
+
     /// 上传进度回调
     /// - Parameter progress: 进度闭包（0~1）
     /// - Returns: self
@@ -287,11 +302,64 @@ extension CryoResult {
         return nil
     }
 
+    /// 统一分发最终失败。
+    ///
+    /// 全局拦截器处理始终先于当前请求的可选局部回调执行。
+    /// - Parameters:
+    ///   - failure: 已标准化的统一失败信息。
+    ///   - request: 发生失败的 URL 请求。
+    ///   - localFailure: 当前请求的可选局部失败回调。
+    func emitFailure(
+        _ failure: CryoFailure,
+        request: URLRequest?,
+        localFailure: @escaping (CryoFailure) -> Void
+    ) {
+        let enrichedFailure = failure.attachingAuthenticationRevision(
+            authenticationContext?.revision
+        )
+        (interceptor as? CryoFailureHandling)?.handleFailure(enrichedFailure, request: request)
+        localFailure(enrichedFailure)
+    }
+
+    /// 将原始错误标准化后统一分发给全局处理与旧字符串回调。
+    /// - Parameters:
+    ///   - error: 原始错误。
+    ///   - response: 当前 HTTP 响应。
+    ///   - responseData: 当前原始响应体。
+    ///   - request: 发生失败的 URL 请求。
+    ///   - preferredKind: 上层已确定的错误类别。
+    ///   - failed: 旧字符串失败回调。
+    func emitLegacyFailure(
+        _ error: Error,
+        response: HTTPURLResponse?,
+        responseData: Data?,
+        request: URLRequest?,
+        preferredKind: CryoFailure.Kind? = nil,
+        failed: @escaping (String) -> Void
+    ) {
+        let failure = CryoFailure.wrapping(
+            error,
+            response: response,
+            responseData: responseData,
+            preferredKind: preferredKind
+        )
+        emitFailure(failure, request: request) { failed($0.message) }
+    }
+
+    /// 报告未配置拦截器，并保持旧字符串回调行为。
+    /// - Parameters:
+    ///   - originalData: 当前原始响应体。
+    ///   - failed: 旧字符串失败回调。
     func failBecauseInterceptorMissing(
         originalData: Data?,
         failed: @escaping (String) -> Void
     ) {
-        failed(interceptorRequiredMessage)
+        let failure = CryoFailure(
+            kind: .interceptorMissing,
+            message: interceptorRequiredMessage,
+            responseData: originalData
+        )
+        emitFailure(failure, request: request.request) { failed($0.message) }
         debugRequestLog(
             originalData,
             error: interceptorRequiredMessage,
@@ -299,6 +367,91 @@ extension CryoResult {
             interceptorInfo: nil,
             noInterceptor: true
         )
+    }
+
+    /// 统一执行拦截器响应、数据转换和失败分发。
+    /// - Parameters:
+    ///   - completeData: 是否使用拦截器的完整响应体处理方式。
+    ///   - transform: 将拦截器返回的 `Data` 转换为目标类型。
+    ///   - transformErrorMessage: 为转换错误生成对外文案。
+    ///   - success: 转换成功回调。
+    ///   - failure: 当前请求的可选局部失败回调。
+    private func handleInterceptedResponse<T>(
+        completeData: Bool,
+        transform: @escaping (Data) throws -> T,
+        transformErrorMessage: @escaping (Error) -> String,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) {
+        request.response { response in
+            let interceptorInfo = self.getInterceptorInfo()
+            let originalData = response.data
+            let urlRequest = response.request ?? self.request.request
+
+            guard let interceptor = self.interceptor else {
+                let missingFailure = CryoFailure(
+                    kind: .interceptorMissing,
+                    message: self.interceptorRequiredMessage,
+                    statusCode: response.response?.statusCode,
+                    responseData: originalData
+                )
+                self.emitFailure(missingFailure, request: urlRequest, localFailure: failure)
+                self.debugRequestLog(
+                    originalData,
+                    error: self.interceptorRequiredMessage,
+                    fromInterceptor: false,
+                    interceptorInfo: nil,
+                    noInterceptor: true
+                )
+                return
+            }
+
+            let result = completeData
+                ? interceptor.interceptResponseWithCompleteData(response)
+                : interceptor.interceptResponse(response)
+
+            switch result {
+            case .success(let data):
+                do {
+                    let value = try transform(data)
+                    self.debugRequestLog(
+                        data,
+                        fromInterceptor: true,
+                        interceptorInfo: interceptorInfo
+                    )
+                    success(value)
+                } catch {
+                    let errorMessage = transformErrorMessage(error)
+                    let decodingFailure = CryoFailure(
+                        kind: .decoding,
+                        message: errorMessage,
+                        statusCode: response.response?.statusCode,
+                        responseData: data,
+                        underlyingError: error
+                    )
+                    self.emitFailure(decodingFailure, request: urlRequest, localFailure: failure)
+                    self.debugRequestLog(
+                        data,
+                        error: errorMessage,
+                        fromInterceptor: true,
+                        interceptorInfo: interceptorInfo
+                    )
+                }
+            case .failure(let error):
+                let standardizedFailure = CryoFailure.wrapping(
+                    error,
+                    response: response.response,
+                    responseData: originalData
+                )
+                self.emitFailure(standardizedFailure, request: urlRequest, localFailure: failure)
+                self.debugRequestLog(
+                    originalData,
+                    error: error.localizedDescription,
+                    fromInterceptor: true,
+                    interceptorInfo: interceptorInfo
+                )
+            }
+        }
     }
 
     /// 拦截器响应并解码单个模型
@@ -313,36 +466,34 @@ extension CryoResult {
         success: @escaping (T) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
-            let interceptorInfo = self.getInterceptorInfo()
-            let originalData = response.data
+        handleInterceptedResponse(
+            completeData: false,
+            transform: { try JSONDecoder().decode(T.self, from: $0) },
+            transformErrorMessage: { "DataToModel失败: \($0.localizedDescription)" },
+            success: success,
+            failure: { failed($0.message) }
+        )
+        return self
+    }
 
-            guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
-                return
-            }
-
-            switch interceptor.interceptResponse(response) {
-            case .success(let data):
-                do {
-                    let model = try JSONDecoder().decode(T.self, from: data)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(model)
-                } catch {
-                    let errorMessage = "DataToModel失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            }
-        }
+    /// 拦截器响应并解码单个模型，失败时返回统一失败信息。
+    /// - Parameters:
+    ///   - type: 目标模型类型。
+    ///   - success: 模型解码成功回调。
+    ///   - failure: 当前请求的可选统一失败回调。全局 `handleFailure`会先执行。
+    @discardableResult
+    public func interceptModel<T: Codable>(
+        type: T.Type,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> Self {
+        handleInterceptedResponse(
+            completeData: false,
+            transform: { try JSONDecoder().decode(T.self, from: $0) },
+            transformErrorMessage: { "DataToModel失败: \($0.localizedDescription)" },
+            success: success,
+            failure: failure
+        )
         return self
     }
 
@@ -353,36 +504,34 @@ extension CryoResult {
         success: @escaping (T) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
-            let interceptorInfo = self.getInterceptorInfo()
-            let originalData = response.data
+        handleInterceptedResponse(
+            completeData: true,
+            transform: { try JSONDecoder().decode(T.self, from: $0) },
+            transformErrorMessage: { "DataToModel失败: \($0.localizedDescription)" },
+            success: success,
+            failure: { failed($0.message) }
+        )
+        return self
+    }
 
-            guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
-                return
-            }
-
-            switch interceptor.interceptResponseWithCompleteData(response) {
-            case .success(let data):
-                do {
-                    let model = try JSONDecoder().decode(T.self, from: data)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(model)
-                } catch {
-                    let errorMessage = "DataToModel失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            }
-        }
+    /// 拦截器响应完整数据并解码模型，失败时返回统一失败信息。
+    /// - Parameters:
+    ///   - type: 完整响应体对应的目标模型类型。
+    ///   - success: 模型解码成功回调。
+    ///   - failure: 当前请求的可选统一失败回调。全局 `handleFailure`会先执行。
+    @discardableResult
+    public func interceptModelCompleteData<T: Codable>(
+        type: T.Type,
+        success: @escaping (T) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> Self {
+        handleInterceptedResponse(
+            completeData: true,
+            transform: { try JSONDecoder().decode(T.self, from: $0) },
+            transformErrorMessage: { "DataToModel失败: \($0.localizedDescription)" },
+            success: success,
+            failure: failure
+        )
         return self
     }
 
@@ -392,36 +541,32 @@ extension CryoResult {
         success: @escaping (JSON) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
-            let interceptorInfo = self.getInterceptorInfo()
-            let originalData = response.data
+        handleInterceptedResponse(
+            completeData: true,
+            transform: { try JSON(data: $0) },
+            transformErrorMessage: { "JSON解析失败: \($0.localizedDescription)" },
+            success: success,
+            failure: { failed($0.message) }
+        )
+        return self
+    }
 
-            guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
-                return
-            }
-
-            switch interceptor.interceptResponseWithCompleteData(response) {
-            case .success(let data):
-                do {
-                    let json = try JSON(data: data)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(json)
-                } catch {
-                    let errorMessage = "JSON解析失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            }
-        }
+    /// 拦截器响应完整数据并解析 SwiftyJSON，失败时返回统一失败信息。
+    /// - Parameters:
+    ///   - success: JSON 解析成功回调。
+    ///   - failure: 当前请求的可选统一失败回调。全局 `handleFailure`会先执行。
+    @discardableResult
+    public func interceptJSON(
+        success: @escaping (JSON) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> Self {
+        handleInterceptedResponse(
+            completeData: true,
+            transform: { try JSON(data: $0) },
+            transformErrorMessage: { "JSON解析失败: \($0.localizedDescription)" },
+            success: success,
+            failure: failure
+        )
         return self
     }
 
@@ -432,36 +577,34 @@ extension CryoResult {
         success: @escaping ([T]) -> Void,
         failed: @escaping (String) -> Void = { _ in }
     ) -> Self {
-        self.request.response { response in
-            let interceptorInfo = self.getInterceptorInfo()
-            let originalData = response.data
+        handleInterceptedResponse(
+            completeData: false,
+            transform: { try JSONDecoder().decode([T].self, from: $0) },
+            transformErrorMessage: { "DataToModel数组失败: \($0.localizedDescription)" },
+            success: success,
+            failure: { failed($0.message) }
+        )
+        return self
+    }
 
-            guard let interceptor = self.interceptor else {
-                self.failBecauseInterceptorMissing(originalData: originalData, failed: failed)
-                return
-            }
-
-            switch interceptor.interceptResponse(response) {
-            case .success(let data):
-                do {
-                    let modelArray = try JSONDecoder().decode([T].self, from: data)
-                    debugRequestLog(data, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                    success(modelArray)
-                } catch {
-                    let errorMessage = "DataToModel数组失败: \(error.localizedDescription)"
-                    failed(errorMessage)
-                    debugRequestLog(data, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            case .failure(let error):
-                let errorMessage = error.localizedDescription
-                failed(errorMessage)
-                if let originalData = originalData {
-                    debugRequestLog(originalData, error: "\(errorMessage)", fromInterceptor: true, interceptorInfo: interceptorInfo)
-                } else {
-                    debugRequestLog(nil, error: errorMessage, fromInterceptor: true, interceptorInfo: interceptorInfo)
-                }
-            }
-        }
+    /// 拦截器响应并解码模型数组，失败时返回统一失败信息。
+    /// - Parameters:
+    ///   - type: 数组元素类型。
+    ///   - success: 模型数组解码成功回调。
+    ///   - failure: 当前请求的可选统一失败回调。全局 `handleFailure`会先执行。
+    @discardableResult
+    public func interceptModelArray<T: Codable>(
+        type: T.Type,
+        success: @escaping ([T]) -> Void,
+        failure: @escaping (CryoFailure) -> Void
+    ) -> Self {
+        handleInterceptedResponse(
+            completeData: false,
+            transform: { try JSONDecoder().decode([T].self, from: $0) },
+            transformErrorMessage: { "DataToModel数组失败: \($0.localizedDescription)" },
+            success: success,
+            failure: failure
+        )
         return self
     }
 }
@@ -541,27 +684,16 @@ extension CryoResult {
 
 @available(macOS 10.15, iOS 13, *)
 extension CryoResult {
-    /// 统一拦截器错误处理，包装为 InterceptorError
-    /// - Parameter error: 错误信息
-    /// - Returns: Error
-    internal func handleInterceptorError(_ error: String) -> Error {
-        let interceptorInfo = getInterceptorInfo()
-        return InterceptorError(
-            message: error,
-            interceptorInfo: interceptorInfo
-        )
-    }
-
     /// 异步拦截器获取模型
     /// - Parameter type: 模型类型(Codable)
     /// - Returns: 解码后的模型
     public func interceptModelAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
-            interceptModel(type: type) { model in
+            interceptModel(type: type, success: { model in
                 continuation.resume(returning: model)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
-            }
+            }, failure: { failure in
+                continuation.resume(throwing: failure)
+            })
         }
     }
 
@@ -570,11 +702,11 @@ extension CryoResult {
     /// - Returns: 解码后的模型
     public func interceptModelCompleteDataAsync<T: Codable>(_ type: T.Type) async throws -> T {
         return try await withCheckedThrowingContinuation { continuation in
-            interceptModelCompleteData(type: type) { model in
+            interceptModelCompleteData(type: type, success: { model in
                 continuation.resume(returning: model)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
-            }
+            }, failure: { failure in
+                continuation.resume(throwing: failure)
+            })
         }
     }
 
@@ -583,11 +715,11 @@ extension CryoResult {
     /// - Returns: JSON
     public func interceptJSONAsync() async throws -> JSON {
         return try await withCheckedThrowingContinuation { continuation in
-            interceptJSON { json in
+            interceptJSON(success: { json in
                 continuation.resume(returning: json)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
-            }
+            }, failure: { failure in
+                continuation.resume(throwing: failure)
+            })
         }
     }
 
@@ -597,11 +729,11 @@ extension CryoResult {
     /// - Returns: 模型数组
     public func interceptModelArrayAsync<T: Codable>(_ type: T.Type) async throws -> [T] {
         return try await withCheckedThrowingContinuation { continuation in
-            interceptModelArray(type: type) { models in
+            interceptModelArray(type: type, success: { models in
                 continuation.resume(returning: models)
-            } failed: { error in
-                continuation.resume(throwing: self.handleInterceptorError(error))
-            }
+            }, failure: { failure in
+                continuation.resume(throwing: failure)
+            })
         }
     }
 }

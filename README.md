@@ -7,6 +7,53 @@
 - 统一响应处理（`Data` / `JSON` / `Decodable` / `JSONParseable`）
 - 提供独立的批量上传与下载管理器（并发、队列、状态回调）
 
+## 本次更新：统一失败模型与全局处理入口
+
+本次更新保持原有 `failed(String)` 调用方式可用，将 HTTP、业务、网络和解析失败统一为 `CryoFailure`，并由拦截器的 `handleFailure` 作为唯一全局处理入口。
+
+主要变化：
+
+- 收到 HTTP 响应时，以 `HTTPURLResponse.statusCode` 作为 HTTP 成败的最终依据。
+- HTTP `2xx` 继续执行 JSON 解析、业务成功判断和模型转换。
+- HTTP 非 `2xx` 直接返标准化 HTTP 错误，不再统一降级为 `ValidationError(-1003)`。
+- `CryoFailure` 保留 `kind`、`statusCode`、`businessCode`、`responseData` 和底层错误。
+- 新增 `handleFailure(_ failure:request:)`：使用支持 `CryoFailureHandling` 的拦截器处理 `intercept***` 响应时，最终失败会先经过该方法。
+- 新增 `failure: (CryoFailure) -> Void` 局部回调，仅在当前请求需要额外处理时传入。
+- 新增 `extractBusinessCode`，用于提取服务端业务错误码。
+- 新增可选 `AuthenticationSessionManaging` 与默认 Actor 实现，使用 UUID revision 防止并发重复退出及旧请求影响新会话。
+- 保留 `.validate()` 和现有 401 Token 刷新、自动重试机制。
+
+失败流转顺序：
+
+```text
+收到响应
+├─ HTTP 非 2xx
+│  ├─ 401 先按现有机制刷新 Token 并重试
+│  └─ 不再重试或重试后仍失败
+│     → CryoFailure(.http / .authenticationExpired)
+├─ HTTP 2xx
+│  → 处理底层错误
+│  → 解析 JSON
+│  → isSuccess
+│  ├─ 业务成功 → extractData / 完整响应体 → success
+│  └─ 业务失败 → CryoFailure(.business)
+└─ 未收到 HTTP 响应
+   → CryoFailure(.network / .cancelled)
+
+使用支持 CryoFailureHandling 的拦截器处理 intercept*** 响应时
+→ handleFailure（该拦截器的全局处理）
+→ failure / failed（当前请求，可选）
+```
+
+兼容性说明：
+
+- 原有 `failed: (String) -> Void` 保留，旧代码不需要修改。
+- 原有 `success` 回调、业务数据提取和模型解析方式不变。
+- `handleFailure` 只属于当前请求使用的拦截器；未配置拦截器，或自定义拦截器未实现 `CryoFailureHandling` 时，不会调用。
+- `DefaultInterceptor.handleFailure` 默认为空实现，不重写时不会产生额外动作。
+- 全局 `handleFailure` 不会吞掉当前请求的局部失败回调。
+- 详细变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 安装
 
 通过 Swift Package Manager：
@@ -40,15 +87,15 @@ let cryoNet = CryoNet { config in
     config.tokenManager = DefaultTokenManager()
     config.interceptor = DefaultInterceptor(
         extractData: { json, originalData in
-            // 自定义数据提取逻辑：提取业务字段
+            // 自定义数据提取逻辑：提取业务字段（按照自己服务端数据结构直接提取相应层级数据）
             JSON.extractDataFromJSON(json["data"], originalData: originalData)
         },
         isSuccess: { json in
-            // 自定义成功判断逻辑
+            // 自定义成功判断逻辑（按照自己服务端状态码判断请求是否正确，失败则进入failed）
             return json["code"].intValue == 0
         },
         extractFailureReason: { json, _ in
-            // 自定义失败原因提取逻辑
+            // 自定义失败原因提取逻辑（直接从服务端响应数据中提取失败信息）
             json["msg"].string
         }
     )
@@ -131,6 +178,40 @@ cryoNet.request(API.newsList)
 // 错误信息为：未配置拦截器，请使用response***获取响应数据
 ```
 
+`interceptModelArray` 使用 `JSONDecoder`，因此模型必须实现 `Codable`；
+`interceptJSONModelArray` 使用 SwiftyJSON，模型必须实现 `JSONParseable`。
+模型协议与 API 不匹配时，Xcode 可能不会补全或高亮对应方法。
+
+Async 写法使用 `do/catch` 捕获失败：
+
+```swift
+Task {
+    do {
+        let list = try await cryoNet
+            .request(API.newsList)
+            .interceptJSONModelArrayAsync(NewsItem.self)
+
+        await MainActor.run {
+            self.newsList = list
+        }
+    } catch let failure as CryoFailure {
+        switch failure.kind {
+        case .authenticationExpired:
+            print("登录状态已失效")
+        case .http:
+            print("HTTP 错误：\(failure.statusCode ?? -1)")
+        case .business:
+            print("业务错误：\(failure.businessCode ?? -1)")
+        default:
+            print(failure.message)
+        }
+    } catch {
+        // 防御性处理非 CryoNet 产生的其他错误。
+        print(error.localizedDescription)
+    }
+}
+```
+
 ### 为什么推荐配置响应拦截器
 
 一般情况下,业务接口返回结构都比较统一，例如：
@@ -197,14 +278,37 @@ cryoNet.request(API.newsList)
 
 ### 默认行为说明（重要）
 
-- 网络层错误优先：如超时、断网、DNS/TLS、请求取消等，直接返回网络错误。
-- HTTP 层其次：HTTP 非 `2xx` 直接失败，不进入业务 `isSuccess` 判断。
+- HTTP 响应优先：收到 HTTP 响应时，非 `2xx` 直接失败，不进入业务 `isSuccess` 判断。
+- 网络层错误：HTTP `2xx` 或未收到 HTTP 响应时，再处理超时、断网、DNS/TLS、请求取消等错误。
 - 业务层最后：仅在 HTTP `2xx` 且 JSON 可解析时，才会执行 `isSuccess`。
 - `isSuccess` 默认值：未配置时默认返回 `true`（即业务层默认成功）。
 - `extractFailureReason` 调用时机：仅在 `isSuccess == false` 时调用。
 - `extractFailureReason` 默认逻辑：尝试 `message/msg/error/reason/detail`，取不到使用兜底文案。
 - 拦截器优先级：`request(..., interceptor:)` 传入的请求级拦截器优先；未传时回退到 `CryoNetConfiguration.interceptor`。
 - 未配置拦截器时：所有 `intercept***` 系列接口直接失败，提示使用 `response***` 系列接口。
+
+### 默认 HTTP 错误映射
+
+| HTTP 状态码 | `NSError.domain` | `NSError.code` | 默认文案 |
+| --- | --- | ---: | --- |
+| 400 | `ClientError` | 400 | 请求参数错误 |
+| 401 | `AuthError` | 401 | 身份验证失败 |
+| 403 | `AuthError` | 403 | 访问被拒绝 |
+| 404 | `ClientError` | 404 | 资源未找到 |
+| 405 | `ClientError` | 405 | 方法不被允许 |
+| 500...599 | `ServerError` | 原始状态码 | 服务器错误 |
+| 其他非 2xx | `HTTPError` | 原始状态码 | 未知HTTP错误 |
+
+HTTP 错误的 `userInfo` 会尽可能包含：
+
+```swift
+let nsError = error as NSError
+let statusCode = nsError.userInfo["statusCode"] as? Int
+let responseCode = nsError.userInfo["responseCode"] as? Int
+let responseData = nsError.userInfo["responseData"] as? Data
+let originalData = nsError.userInfo["originalData"] as? Data
+let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error
+```
 
 ### 便捷配置（推荐）
 
@@ -223,9 +327,374 @@ let interceptor = DefaultInterceptor(
 )
 ```
 
+### 统一失败模型
+
+`CryoFailure` 为全局处理和当前请求提供相同的结构化信息：
+
+| 属性 | 说明 |
+| --- | --- |
+| `kind` | 失败类别，包含认证失效、HTTP、业务、网络、解析、取消等 |
+| `message` | 用于日志或用户提示的错误文案 |
+| `statusCode` | HTTP 状态码，无 HTTP 响应时为 `nil` |
+| `businessCode` | 服务端业务错误码 |
+| `authenticationRevision` | 请求首次适配时捕获的认证会话 UUID revision |
+| `responseData` | 服务端原始响应体 |
+| `underlyingError` | Alamofire、URLSession 或解析器的底层错误 |
+
+`CryoFailure.Kind` 包含：
+
+- `.authenticationExpired`：HTTP 401 等认证失效。
+- `.http`：其他 HTTP 非 `2xx`。
+- `.business`：HTTP 成功，但业务成功判断未通过。
+- `.network`：超时、断网、DNS、TLS 等网络失败。
+- `.decoding`：JSON 或模型转换失败。
+- `.cancelled`：请求被取消。
+- `.interceptorMissing`：未配置拦截器却调用 `intercept***`。
+- `.unknown`：其他未归类错误。
+
+四个接口的适用场景：
+
+| API | 成功时解析的数据 | 典型用途 |
+| --- | --- | --- |
+| `interceptModel` | `extractData` 提取后的业务数据 | 单个业务模型 |
+| `interceptModelArray` | `extractData` 提取后的业务数组 | 业务列表 |
+| `interceptModelCompleteData` | 服务端完整 JSON 响应体 | 需要 `code/message/data` 包装层的模型 |
+| `interceptJSON` | 服务端完整 JSON 响应体 | 需要手动读取完整 JSON |
+
+`完整响应体` 指 HTTP `2xx` 且业务成功时的服务端完整 JSON。底层对应 `interceptResponseWithCompleteData`；业务方通常使用 `interceptModelCompleteData` 或 `interceptJSON`。
+
+### 拦截器的单一全局失败入口
+
+继承 `DefaultInterceptor` 并重写 `handleFailure`，即可统一处理所有使用该拦截器的 `intercept***` 请求产生的 HTTP、业务、网络和解析失败。同步回调与 async/await 调用的规则相同。
+
+`response***` 系列是不经过业务响应拦截的直接响应 API，不属于这个全局入口的触发范围。
+
+```swift
+import CryoNet
+import Foundation
+
+/// App 全局会话与提示协调器。
+/// 实际项目中可以替换为路由器、Toast 管理器或依赖注入服务。
+@MainActor
+final class AppSessionCoordinator {
+    static let shared = AppSessionCoordinator()
+
+    func requireLogin() {
+        // 清理本地会话并跳转登录页
+    }
+
+    func showMessage(_ message: String) {
+        // 展示 Toast / Alert
+    }
+}
+
+/// 全局业务拦截器。
+final class AppInterceptor: DefaultInterceptor, @unchecked Sendable {
+    override func handleFailure(_ failure: CryoFailure, request: URLRequest?) {
+        // 响应回调不保证在主线程，UI 动作需要切换到 MainActor。
+        Task { @MainActor in
+            if failure.statusCode == 401 || failure.businessCode == 10001 {
+                AppSessionCoordinator.shared.requireLogin()
+                return
+            }
+
+            switch failure.kind {
+            case .http where failure.statusCode == 403:
+                AppSessionCoordinator.shared.showMessage("没有访问权限")
+            case .http where (500...599).contains(failure.statusCode ?? 0):
+                AppSessionCoordinator.shared.showMessage("服务器异常，请稍后再试")
+            case .business:
+                AppSessionCoordinator.shared.showMessage(failure.message)
+            default:
+                break
+            }
+        }
+    }
+}
+```
+
+`handleFailure` 可能从非主线程调用，UI 操作需要显式切换到 `MainActor`。多个并发请求可能同时返回登录失效，建议会话管理器对退出登录动作做幂等保护。
+
+#### 并发安全注意事项
+
+`CryoFailure` 是每次失败独立创建的不可变值，`businessCode` 不是全局变量，多个请求或多个 `CryoNet` 实例之间不会相互覆盖。但 `handleFailure` 可能被多个并发请求同时调用，因此需要对以下共享动作自行保证幂等与线程安全：
+
+- 清理登录信息与跳转登录页。
+- 展示 Toast 或 Alert。
+- 写入共享状态或数据库。
+- 上报错误日志与监控事件。
+
+框架提供可选的 `DefaultAuthenticationSessionManager` Actor，用于原子维护登录状态和 UUID 会话 revision。revision 仅用于相等性比较：登录、退出或切换账号后生成新的 UUID；请求首次适配时会捕获当时的 revision，并保存到 `CryoFailure.authenticationRevision`。
+
+使用默认状态管理器：
+
+```swift
+let tokenManager = MyTokenManager()
+
+// App 启动时根据用户自己的持久化 Token 恢复登录状态。
+let authenticationSession =
+    await DefaultAuthenticationSessionManager.restore(
+        using: tokenManager
+    )
+
+final class AppInterceptor: DefaultInterceptor, @unchecked Sendable {
+    override func handleFailure(_ failure: CryoFailure, request: URLRequest?) {
+        let requiresLogin =
+            failure.statusCode == 401 ||
+            failure.businessCode == 10001
+
+        guard requiresLogin else { return }
+
+        Task {
+            // revision 比较与 authenticated -> loggingOut 在 Actor 内原子完成。
+            guard let authenticationSession,
+                  await authenticationSession.beginLogoutIfCurrent(
+                      expectedRevision: failure.authenticationRevision
+                  ) else {
+                return
+            }
+
+            // 清除 Token 的具体持久化方式仍由用户自己的账号系统负责。
+            await MainActor.run {
+                // SessionManager.shared.clearSession()
+                // Router.shared.showLogin()
+            }
+
+            await authenticationSession.markLoggedOut()
+        }
+    }
+}
+
+let interceptor = AppInterceptor(
+    extractData: { json, originalData in
+        JSON.extractDataFromJSON(json["data"], originalData: originalData)
+    },
+    isSuccess: { json in
+        json["code"].intValue == 0
+    },
+    extractFailureReason: { json, _ in
+        json["message"].string
+    },
+    extractBusinessCode: { json, _ in
+        json["code"].int
+    },
+    authenticationSession: authenticationSession
+)
+```
+
+登录成功后，用户先持久化 Token，再更新框架运行期状态：
+
+```swift
+await tokenManager.setToken(newToken)
+await authenticationSession.markAuthenticated()
+```
+
+用户也可以实现 `AuthenticationSessionManaging`，使用自己的 Actor、Keychain、UserDefaults、数据库或账号系统。自定义实现必须保证 `beginLogoutIfCurrent(expectedRevision:)` 中的 revision 比较与状态切换是原子操作。
+
+```swift
+actor AppAuthenticationSession: AuthenticationSessionManaging {
+    private var state: AuthenticationState
+    private var revision = UUID()
+
+    init(hasPersistedToken: Bool) {
+        state = hasPersistedToken ? .authenticated : .unauthenticated
+    }
+
+    func snapshot() -> AuthenticationSnapshot {
+        AuthenticationSnapshot(state: state, revision: revision)
+    }
+    // 自行当前会话是否登录
+    func beginLogoutIfCurrent(expectedRevision: UUID?) -> Bool {
+        return true
+    }
+    // 已认证（登录）
+    func markAuthenticated() {
+        revision = UUID()
+        state = .authenticated
+    }
+    // 退出登录
+    func markLoggedOut() {
+        // 可在调用本方法前由用户自己的账号系统清除持久化 Token。
+        revision = UUID()
+        state = .unauthenticated
+    }
+}
+```
+
+如果多个 `CryoNet` 实例或不同拦截器共享同一登录状态，应注入同一个 `AuthenticationSessionManaging` 实例。不要在拦截器中保存 `currentBusinessCode`、`currentFailure` 等可变的“当前请求”状态。
+
+状态与 revision 规则：
+
+- `.authenticated`：允许一次调用原子切换到 `.loggingOut`。
+- `.loggingOut`：并发登录失效请求不再重复执行退出操作。
+- `.unauthenticated`：忽略后续登录失效请求。
+- `markAuthenticated()`：生成新 UUID revision 并切换为已登录。
+- `markLoggedOut()`：生成新 UUID revision 并切换为未登录。
+- 旧请求携带的 revision 与当前 revision 不一致时，不能退出当前新会话。
+- revision 通常不需要持久化；App 重启后旧进程请求已不存在，启动时重新生成 UUID 即可。
+
+HTTP 401 仍会先由 Alamofire `RequestRetrier` 尝试刷新 Token 并重试；只有刷新失败或重试后仍然失败才进入 `handleFailure`。HTTP 200 下的业务登录失效码会直接进入 `handleFailure`。如果该业务码也需要自动刷新并重放原请求，则需要额外的异步业务重试机制，不建议在 `handleFailure` 中直接重放 `URLRequest`。
+
+> `handleFailure` 不依赖局部 `failed` / `failure` 闭包，但仍需要通过 `interceptModel`、`interceptJSON` 等响应 API 消费响应，才能解析服务端业务状态。仅创建 `request()` 而不注册任何响应处理时，业务 JSON 不会被解析。
+
+### 完整接入示例
+
+以如下服务端响应为例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": 1001,
+    "name": "CryoNet"
+  }
+}
+```
+
+1. 定义业务模型和请求：
+
+```swift
+import Alamofire
+import CryoNet
+
+struct User: Codable {
+    let id: Int
+    let name: String
+}
+
+struct APIResponse<T: Codable>: Codable {
+    let code: Int
+    let message: String
+    let data: T
+}
+
+enum API {
+    static let userDetail = RequestModel(
+        path: "/users/detail",
+        method: .get,
+        encoding: .urlDefault,
+        explain: "用户详情"
+    )
+}
+```
+
+2. 创建全局拦截器并配置 `CryoNet`：
+
+```swift
+let appInterceptor = AppInterceptor(
+    extractData: { json, originalData in
+        // interceptModel / interceptModelArray 成功时只返回 data 字段。
+        JSON.extractDataFromJSON(json["data"], originalData: originalData)
+    },
+    isSuccess: { json in
+        // 只有 HTTP 2xx 才会执行该业务成功判断。
+        json["code"].intValue == 0
+    },
+    extractFailureReason: { json, _ in
+        // HTTP 2xx 但 code != 0 时，生成 BusinessError 文案。
+        json["message"].string
+    },
+    extractBusinessCode: { json, _ in
+        // 保存到 CryoFailure.businessCode，供全局 handleFailure 判断。
+        json["code"].int
+    }
+)
+
+let cryoNet = CryoNet { config in
+    config.baseURL = "https://api.example.com"
+    config.defaultTimeout = 30
+    config.basicHeaders = [
+        .init(name: "Content-Type", value: "application/json")
+    ]
+    config.tokenManager = MyTokenManager()
+    config.interceptor = appInterceptor
+}
+```
+
+3. 只解析 `data` 字段。全局失败处理不依赖局部失败回调：
+
+```swift
+cryoNet.request(
+    API.userDetail,
+    parameters: ["id": 1001]
+)
+.interceptModel(
+    type: User.self,
+    success: { user in
+        // HTTP 2xx + code == 0 + User 解码成功。
+        print("用户: \(user.name)")
+    }
+)
+```
+
+4. 当前页面需要额外处理时，再传入结构化 `failure` 回调：
+
+```swift
+cryoNet.request(API.userDetail, parameters: ["id": 1001])
+    .interceptModel(
+        type: User.self,
+        success: { user in
+            updateUI(user)
+        },
+        failure: { failure in
+            // 全局 handleFailure 已经先执行。
+            stopLoading()
+
+            switch failure.kind {
+            case .network:
+                showRetryButton()
+            case .decoding:
+                print("解析失败: \(failure.message)")
+            default:
+                break
+            }
+        }
+    )
+```
+
+5. 如果模型需要包含 `code/message/data` 完整包装层，使用 `interceptModelCompleteData`：
+
+```swift
+cryoNet.request(API.userDetail, parameters: ["id": 1001])
+    .interceptModelCompleteData(
+        type: APIResponse<User>.self,
+        success: { response in
+            print(response.code)
+            print(response.message)
+            print(response.data.name)
+        },
+        failure: { failure in
+            print("请求失败: \(failure.message)")
+        }
+    )
+```
+
+6. 原有字符串失败回调仍可使用：
+
+```swift
+cryoNet.request(API.userDetail, parameters: ["id": 1001])
+    .interceptModel(
+        type: User.self,
+        success: { user in
+            print(user)
+        },
+        failed: { message in
+            // 兼容旧代码，但这里只能获取错误文案。
+            print(message)
+        }
+    )
+```
+
+全局与局部处理的职责建议：
+
+- `handleFailure`：处理退出登录、全局提示、日志、监控上报等所有请求的公共动作。
+- `failure(CryoFailure)`：当前页面停止 loading、展示空态、提供重试按钮等局部动作。
+- `failed(String)`：保留给旧代码或只需错误文案的简单场景。
+
 ### 不使用 `DefaultInterceptor` 时如何配置
 
-你可以直接实现 `RequestInterceptorProtocol`，完全自定义请求与响应处理逻辑。
+你可以直接实现 `RequestInterceptorProtocol`，完全自定义请求与响应处理逻辑。如果仍需要统一全局失败入口，同时实现 `CryoFailureHandling`。
 
 你也可以继承 `DefaultInterceptor`，只重写你关心的部分（例如 `isResponseSuccess`、`extractSuccessData`、`handleCustomError`）。
 
@@ -233,7 +702,7 @@ let interceptor = DefaultInterceptor(
 import Alamofire
 import CryoNet
 
-final class MyCustomInterceptor: RequestInterceptorProtocol, @unchecked Sendable {
+final class MyCustomInterceptor: RequestInterceptorProtocol, CryoFailureHandling, @unchecked Sendable {
     func interceptRequest(_ urlRequest: URLRequest, tokenManager: TokenManagerProtocol) async -> URLRequest {
         var request = urlRequest
         if let token = await tokenManager.getToken() {
@@ -243,10 +712,10 @@ final class MyCustomInterceptor: RequestInterceptorProtocol, @unchecked Sendable
     }
 
     func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
-        if let error = response.error { return .failure(error) } // 网络层优先
-        guard let httpResponse = response.response, 200..<300 ~= httpResponse.statusCode else {
-            return .failure(NSError(domain: "HTTPError", code: response.response?.statusCode ?? -1))
+        if let httpResponse = response.response, !(200..<300).contains(httpResponse.statusCode) {
+            return .failure(NSError(domain: "HTTPError", code: httpResponse.statusCode))
         }
+        if let error = response.error { return .failure(error) }
         guard let data = response.data else {
             return .failure(NSError(domain: "DataError", code: -1))
         }
@@ -256,6 +725,10 @@ final class MyCustomInterceptor: RequestInterceptorProtocol, @unchecked Sendable
 
     func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
         interceptResponse(response)
+    }
+
+    func handleFailure(_ failure: CryoFailure, request: URLRequest?) {
+        // 统一处理使用当前拦截器的 intercept*** 最终失败
     }
 }
 ```
@@ -501,4 +974,3 @@ print(active.count, completed.count, failed.count, cancelled.count)
 - 项目地址：https://github.com/snoux/CryoNet
 - 文档地址：https://snoux.github.io/CryoNet
 - 简单Demo: https://gitee.com/snoux/cryo-net-demo.git
-

@@ -31,6 +31,12 @@ open class DefaultResponseStructure: ResponseStructureConfig, @unchecked Sendabl
         }
         return nil
     }
+
+    /// 业务错误码提取，默认读取 `code` 字段。
+    /// - Returns: 业务错误码，无法提取时返回 `nil`。
+    open func extractBusinessCode(from json: JSON, originalData: Data) -> Int? {
+        json["code"].int
+    }
 }
 
 // MARK: - 便捷配置结构体
@@ -60,16 +66,20 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
     private let isSuccessHandler: @Sendable (JSON) -> Bool
     /// 自定义失败原因提取闭包
     private let extractFailureReasonHandler: @Sendable (JSON, Data) -> String?
+    /// 自定义业务错误码提取闭包
+    private let extractBusinessCodeHandler: @Sendable (JSON, Data) -> Int?
     
     /// 初始化响应配置
     /// - Parameters:
     ///   - extractData: 可选的自定义数据提取闭包，返回提取的数据或错误。如果为 nil 则使用默认逻辑
     ///   - isSuccess: 可选的自定义成功判断闭包，返回是否成功。如果为 nil 则使用默认逻辑
     ///   - extractFailureReason: 可选的失败原因提取闭包
+    ///   - extractBusinessCode: 可选的业务错误码提取闭包，默认读取 `code` 字段。
     public init(
         extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
         isSuccess: ((JSON) -> Bool)? = nil,
-        extractFailureReason: ((JSON, Data) -> String?)? = nil
+        extractFailureReason: ((JSON, Data) -> String?)? = nil,
+        extractBusinessCode: ((JSON, Data) -> Int?)? = nil
     ) {
         // 如果提供了自定义闭包，使用自定义闭包；否则使用默认逻辑
         if let extractData = extractData {
@@ -108,6 +118,16 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
                 return nil
             }
         }
+
+        if let extractBusinessCode = extractBusinessCode {
+            self.extractBusinessCodeHandler = { @Sendable json, originalData in
+                extractBusinessCode(json, originalData)
+            }
+        } else {
+            self.extractBusinessCodeHandler = { @Sendable json, _ in
+                json["code"].int
+            }
+        }
     }
     
     /// 判断响应是否成功
@@ -124,6 +144,11 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
     public func extractFailureReason(from json: JSON, originalData: Data) -> String? {
         extractFailureReasonHandler(json, originalData)
     }
+
+    /// 从响应中提取业务错误码。
+    public func extractBusinessCode(from json: JSON, originalData: Data) -> Int? {
+        extractBusinessCodeHandler(json, originalData)
+    }
 }
 
 // MARK: - 可继承、线程安全的默认实现
@@ -132,14 +157,12 @@ public struct ResponseConfig: ResponseStructureConfig, @unchecked Sendable {
 ///
 /// 通过 actor 保证并发安全，可自定义 token 刷新策略。
 open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
-    private let storage = TokenStorageActor()
+    private let storage: TokenStorageActor
 
     /// 初始化，可指定初始 token
     /// - Parameter token: 初始 token
     public init(token: String? = nil) {
-        if let token = token {
-            Task { await storage.set(token) }
-        }
+        self.storage = TokenStorageActor(token: token)
     }
 
     /// 获取当前 Token
@@ -166,29 +189,57 @@ open class DefaultTokenManager: TokenManagerProtocol, @unchecked Sendable {
 /// 默认实现，支持 token 注入、业务异常处理、结构化错误输出，支持响应结构配置定制。
 ///
 /// 可用于自定义拦截链路、业务状态码识别、自动注入 token、错误封装等。
-open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, @unchecked Sendable {
+open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProvider, CryoFailureHandling, AuthenticationSessionProviding, @unchecked Sendable {
 
     /// 响应结构配置
     public let responseConfig: ResponseStructureConfig
 
+    /// 当前拦截器使用的可选认证会话状态管理器。
+    ///
+    /// 配置后，框架会在请求首次适配时捕获会话 UUID revision，并保存到最终 ``CryoFailure``。
+    public let authenticationSession: AuthenticationSessionManaging?
+
     /// 初始化，支持自定义响应结构
-    /// - Parameter responseConfig: 指定响应结构配置
-    public nonisolated init(responseConfig: ResponseStructureConfig = DefaultResponseStructure()) {
+    /// - Parameters:
+    ///   - responseConfig: 指定响应结构配置。
+    ///   - authenticationSession: 可选认证会话状态管理器。
+    public nonisolated init(
+        responseConfig: ResponseStructureConfig,
+        authenticationSession: AuthenticationSessionManaging? = nil
+    ) {
         self.responseConfig = responseConfig
+        self.authenticationSession = authenticationSession
     }
 
-    /// 便捷初始化方法，支持闭包式快速配置（推荐使用）
+    /// 使用默认响应结构且不配置认证状态管理器创建拦截器。
+    public nonisolated convenience init() {
+        self.init(responseConfig: DefaultResponseStructure())
+    }
+
+    /// 便捷初始化方法，支持闭包式快速配置（推荐使用）。
+    /// - Parameters:
+    ///   - extractData: 从完整 JSON 中提取最终业务数据的闭包。
+    ///   - isSuccess: 判断 HTTP 2xx 响应是否业务成功的闭包。
+    ///   - extractFailureReason: 从业务失败响应中提取错误文案的闭包。
+    ///   - extractBusinessCode: 从业务失败响应中提取业务错误码的闭包。
+    ///   - authenticationSession: 可选认证会话状态管理器。
     public nonisolated convenience init(
         extractData: ((JSON, Data) -> Result<Data, Error>)? = nil,
         isSuccess: ((JSON) -> Bool)? = nil,
-        extractFailureReason: ((JSON, Data) -> String?)? = nil
+        extractFailureReason: ((JSON, Data) -> String?)? = nil,
+        extractBusinessCode: ((JSON, Data) -> Int?)? = nil,
+        authenticationSession: AuthenticationSessionManaging? = nil
     ) {
         let config = ResponseConfig(
             extractData: extractData,
             isSuccess: isSuccess,
-            extractFailureReason: extractFailureReason
+            extractFailureReason: extractFailureReason,
+            extractBusinessCode: extractBusinessCode
         )
-        self.init(responseConfig: config)
+        self.init(
+            responseConfig: config,
+            authenticationSession: authenticationSession
+        )
     }
 
     /// 向后兼容老接口的便捷初始化（已废弃）
@@ -250,12 +301,20 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// 响应拦截，只返回业务数据 data
     ///
     /// 处理顺序：
-    /// 1) 网络层错误优先返回失败；
-    /// 2) HTTP 非 2xx 返回失败；
+    /// 1) 已收到 HTTP 响应且为非 2xx 时，返回对应 HTTP 错误；
+    /// 2) HTTP 2xx 或未收到 HTTP 响应时，再处理底层网络错误；
     /// 3) HTTP 2xx 后进入业务判断（`isSuccess`）；
     /// 4) 业务成功返回 `extractData`，业务失败返回 `extractFailureReason`。
     /// - Returns: 业务数据或错误
     open func interceptResponse(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
+        if let httpResponse = response.response,
+           let httpError = handleHTTPStatusCode(
+               httpResponse.statusCode,
+               data: response.data,
+               underlyingError: response.error
+           ) {
+            return .failure(httpError)
+        }
         if let error = response.error {
             return .failure(handleAFError(error))
         }
@@ -277,6 +336,14 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
     /// 网络层与 HTTP 层判断规则与 `interceptResponse` 一致。
     /// - Returns: 完整响应体或错误
     open func interceptResponseWithCompleteData(_ response: AFDataResponse<Data?>) -> Result<Data, Error> {
+        if let httpResponse = response.response,
+           let httpError = handleHTTPStatusCode(
+               httpResponse.statusCode,
+               data: response.data,
+               underlyingError: response.error
+           ) {
+            return .failure(httpError)
+        }
         if let error = response.error {
             return .failure(handleAFError(error))
         }
@@ -324,6 +391,18 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             isCompleteResponse: isCompleteResponse
         )
     }
+
+    /// 使用当前拦截器处理响应时的全局失败入口，默认不执行任何操作。
+    ///
+    /// `intercept***` 系列的 HTTP、业务、网络和数据解析错误都会经过本方法。业务方可通过
+    /// 继承 ``DefaultInterceptor`` 并重写本方法，统一处理登录失效、公共提示、
+    /// 错误日志或监控上报。执行后仍会继续调用当前请求的可选局部失败回调。
+    ///
+    /// - Important: 本方法不保证在主线程执行；如需更新 UI，请切换到 `MainActor`。
+    /// - Parameters:
+    ///   - failure: 已标准化的统一失败信息。
+    ///   - request: 发生失败的 URL 请求；无法获取时为 `nil`。
+    open func handleFailure(_ failure: CryoFailure, request: URLRequest?) {}
 
     /// 获取拦截器配置信息
     /// - Returns: 配置信息字典
@@ -398,20 +477,25 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         let message = json.flatMap {
             responseConfig.extractFailureReason(from: $0, originalData: jsonData)
         } ?? "拦截器未获取到失败原因"
-        let businessCode = httpResponse.statusCode
+        let businessCode = json.flatMap {
+            responseConfig.extractBusinessCode(from: $0, originalData: jsonData)
+        }
         var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
             "statusCode": httpResponse.statusCode,
-            "responseCode": businessCode,
             "interceptorConfig": getInterceptorConfig(),
             "originalData": jsonData
         ]
+        if let businessCode = businessCode {
+            userInfo["businessCode"] = businessCode
+            userInfo["responseCode"] = businessCode
+        }
         if isCompleteResponse {
             userInfo["responseData"] = jsonData
         }
         return .failure(NSError(
             domain: "BusinessError",
-            code: businessCode,
+            code: businessCode ?? httpResponse.statusCode,
             userInfo: userInfo
         ))
     }
@@ -470,9 +554,19 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
         return NSError(domain: "URLError", code: code, userInfo: userInfo)
     }
 
-    /// HTTP 状态码错误处理
-    /// - Returns: NSError 或 nil
-    private func handleHTTPStatusCode(_ statusCode: Int) -> Error? {
+    /// HTTP 状态码错误处理。
+    ///
+    /// 非 2xx 时构造标准化错误，并返回给统一失败分发链路。
+    /// - Parameters:
+    ///   - statusCode: HTTP 状态码。
+    ///   - data: 原始响应体。
+    ///   - underlyingError: Alamofire 或 URLSession 产生的底层错误。
+    /// - Returns: 非 2xx 时返回标准化错误，2xx 时返回 `nil`。
+    private func handleHTTPStatusCode(
+        _ statusCode: Int,
+        data: Data? = nil,
+        underlyingError: Error? = nil
+    ) -> Error? {
         guard statusCode < 200 || statusCode >= 300 else { return nil }
         let (message, domain): (String, String) = {
             switch statusCode {
@@ -485,10 +579,19 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
             default: return ("未知HTTP错误", "HTTPError")
             }
         }()
-        let userInfo: [String: Any] = [
+        var userInfo: [String: Any] = [
             NSLocalizedDescriptionKey: message,
+            "statusCode": statusCode,
+            "responseCode": statusCode,
             "interceptorConfig": getInterceptorConfig()
         ]
+        if let data = data {
+            userInfo["originalData"] = data
+            userInfo["responseData"] = data
+        }
+        if let underlyingError = underlyingError {
+            userInfo[NSUnderlyingErrorKey] = underlyingError
+        }
         return NSError(domain: domain, code: statusCode, userInfo: userInfo)
     }
 
@@ -541,20 +644,35 @@ open class DefaultInterceptor: RequestInterceptorProtocol, InterceptorConfigProv
 class InterceptorAdapter: RequestInterceptor, @unchecked Sendable {
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol
+    private let authenticationSession: AuthenticationSessionManaging?
+    private let authenticationContext: RequestAuthenticationContext?
 
     /// 初始化适配器
     /// - Parameters:
     ///   - interceptor: 拦截器
     ///   - tokenManager: tokenManager
-    init(interceptor: RequestInterceptorProtocol? = nil, tokenManager: TokenManagerProtocol? = nil) {
+    ///   - authenticationSession: 可选认证会话状态管理器。
+    ///   - authenticationContext: 用于保存请求首次适配时会话 revision 的上下文。
+    init(
+        interceptor: RequestInterceptorProtocol? = nil,
+        tokenManager: TokenManagerProtocol? = nil,
+        authenticationSession: AuthenticationSessionManaging? = nil,
+        authenticationContext: RequestAuthenticationContext? = nil
+    ) {
         self.interceptor = interceptor
         self.tokenManager = tokenManager ?? DefaultTokenManager()
+        self.authenticationSession = authenticationSession
+        self.authenticationContext = authenticationContext
     }
 
     /// 请求适配，自动注入 token
     /// - Returns: 适配后的 URLRequest
     func adapt(_ urlRequest: URLRequest, for session: Session, completion: @escaping (Result<URLRequest, Error>) -> Void) {
         Task {
+            if let authenticationSession, let authenticationContext {
+                let snapshot = await authenticationSession.snapshot()
+                authenticationContext.captureIfNeeded(snapshot.revision)
+            }
             if let modifiedRequest = await interceptor?.interceptRequest(urlRequest, tokenManager: tokenManager) {
                 completion(.success(modifiedRequest))
             } else {

@@ -355,12 +355,19 @@ public extension CryoNet {
         let fullURL = model.fullURL(with: config.baseURL)
         let mergedHeaders = mergeHeaders(headers, config: config)
         let userInterceptor = interceptor ?? config.interceptor
+        let authenticationSession =
+            (userInterceptor as? AuthenticationSessionProviding)?.authenticationSession
+        let authenticationContext = authenticationSession == nil
+            ? nil
+            : RequestAuthenticationContext()
         let timeout = model.overtime > 0 ? model.overtime : config.defaultTimeout
         var adapter: InterceptorAdapter? = nil
         if let _ = userInterceptor{
             adapter = InterceptorAdapter(
                 interceptor: userInterceptor,
-                tokenManager: config.tokenManager
+                tokenManager: config.tokenManager,
+                authenticationSession: authenticationSession,
+                authenticationContext: authenticationContext
             )
         }
         
@@ -374,7 +381,11 @@ public extension CryoNet {
         ) { $0.timeoutInterval = timeout }
         .validate()
         
-        return CryoResult(request: request, interceptor: userInterceptor)
+        return CryoResult(
+            request: request,
+            interceptor: userInterceptor,
+            authenticationContext: authenticationContext
+        )
     }
 }
 

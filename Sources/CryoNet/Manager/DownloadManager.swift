@@ -150,10 +150,8 @@ public actor DownloadManager {
     private let globalHeaders: HTTPHeaders?
     private let interceptor: RequestInterceptorProtocol?
     private let tokenManager: TokenManagerProtocol?
-    
-    private var interceptorAdapter: RequestInterceptor {
-        InterceptorAdapter(interceptor: interceptor, tokenManager: tokenManager)
-    }
+    /// 每个下载任务首次适配时捕获的认证会话上下文。
+    private var authenticationContexts: [UUID: RequestAuthenticationContext] = [:]
     
     // MARK: - 闭包回调属性
     /// 单任务状态或进度更新回调
@@ -579,6 +577,21 @@ public actor DownloadManager {
             urlRequestConvertible = currentTask.url
         }
         
+        let authenticationSession =
+            (interceptor as? AuthenticationSessionProviding)?.authenticationSession
+        let authenticationContext = authenticationSession == nil
+            ? nil
+            : RequestAuthenticationContext()
+        if let authenticationContext {
+            authenticationContexts[id] = authenticationContext
+        }
+        let interceptorAdapter = InterceptorAdapter(
+            interceptor: interceptor,
+            tokenManager: tokenManager,
+            authenticationSession: authenticationSession,
+            authenticationContext: authenticationContext
+        )
+
         let request = AF.download(
             urlRequestConvertible,
             method: method,
@@ -621,13 +634,31 @@ public actor DownloadManager {
     private func onComplete(id: UUID, response: AFDownloadResponse<Data>) async {
         guard var currentTask = tasks[id] else { return }
         currentDownloadingCount = max(0, currentDownloadingCount - 1)
+        let authenticationRevision = authenticationContexts[id]?.revision
+        defer { authenticationContexts[id] = nil }
         defer { Task { self.checkAndStartNext() } }
 
         // 优先判断是否为取消（Alamofire/URLSession cancel）
         if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
             currentTask.state = .cancelled
+            notifyGlobalFailure(
+                error: afError,
+                response: response.response,
+                responseData: response.value,
+                request: response.request,
+                authenticationRevision: authenticationRevision,
+                preferredKind: .cancelled
+            )
         } else if let nsError = response.error as NSError?, nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
             currentTask.state = .cancelled
+            notifyGlobalFailure(
+                error: nsError,
+                response: response.response,
+                responseData: response.value,
+                request: response.request,
+                authenticationRevision: authenticationRevision,
+                preferredKind: .cancelled
+            )
         } else {
             let fileExists = FileManager.default.fileExists(atPath: currentTask.destination.path)
             let httpCode = response.response?.statusCode ?? 0
@@ -647,6 +678,23 @@ public actor DownloadManager {
     #endif
             } else {
                 currentTask.state = .failed
+                let error: Error
+                if let responseError = response.error {
+                    error = responseError
+                } else {
+                    error = NSError(
+                        domain: "HTTPError",
+                        code: httpCode,
+                        userInfo: [NSLocalizedDescriptionKey: "下载失败"]
+                    )
+                }
+                notifyGlobalFailure(
+                    error: error,
+                    response: response.response,
+                    responseData: response.value,
+                    request: response.request,
+                    authenticationRevision: authenticationRevision
+                )
             }
         }
         tasks[id] = currentTask
@@ -665,6 +713,33 @@ public actor DownloadManager {
         if let handler = onDownloadDidUpdate {
             Task { await MainActor.run { handler(task) } }
         }
+    }
+
+    /// 将下载失败发送到当前拦截器的统一全局处理入口。
+    /// - Parameters:
+    ///   - error: 下载产生的原始错误。
+    ///   - response: HTTP 响应。
+    ///   - responseData: 下载响应数据。
+    ///   - request: 发生失败的 URL 请求。
+    ///   - authenticationRevision: 请求首次适配时捕获的认证会话 UUID revision。
+    ///   - preferredKind: 上层已确定的错误类别。
+    private func notifyGlobalFailure(
+        error: Error,
+        response: HTTPURLResponse?,
+        responseData: Data?,
+        request: URLRequest?,
+        authenticationRevision: UUID?,
+        preferredKind: CryoFailure.Kind? = nil
+    ) {
+        guard let handler = interceptor as? CryoFailureHandling else { return }
+        let failure = CryoFailure.wrapping(
+            error,
+            response: response,
+            responseData: responseData,
+            authenticationRevision: authenticationRevision,
+            preferredKind: preferredKind
+        )
+        handler.handleFailure(failure, request: request)
     }
     
     // MARK: - 事件派发

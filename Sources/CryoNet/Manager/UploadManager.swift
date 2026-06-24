@@ -229,11 +229,6 @@ public actor UploadManager<Model: JSONParseable> {
     internal var interceptor: DefaultInterceptor
     /// Token 管理
     internal var tokenManager: TokenManagerProtocol
-    /// 内部请求拦截器适配
-    internal var interceptorAdapter: RequestInterceptor {
-        InterceptorAdapter(interceptor: interceptor, tokenManager: tokenManager)
-    }
-    
     // MARK: - 链式闭包事件属性
     /// 单任务状态更新回调（每当某个上传任务变化时触发）
     private var _onUploadDidUpdate: ((UploadTask<Model>) -> Void)?
@@ -373,6 +368,15 @@ public actor UploadManager<Model: JSONParseable> {
             task.state = .uploading
             tasks[id] = task
             currentUploadingCount += 1
+            let authenticationContext = interceptor.authenticationSession == nil
+                ? nil
+                : RequestAuthenticationContext()
+            let interceptorAdapter = InterceptorAdapter(
+                interceptor: interceptor,
+                tokenManager: tokenManager,
+                authenticationSession: interceptor.authenticationSession,
+                authenticationContext: authenticationContext
+            )
             let request = AF.upload(
                 multipartFormData: { multipart in
                     for item in task.files {
@@ -399,7 +403,7 @@ public actor UploadManager<Model: JSONParseable> {
                 },
                 to: uploadURL,
                 headers: headers,
-                interceptor: self.interceptorAdapter
+                interceptor: interceptorAdapter
             )
             .uploadProgress { [weak self] progress in
                 Task { await self?.onProgress(id: id, progress: progress.fractionCompleted) }
@@ -409,7 +413,8 @@ public actor UploadManager<Model: JSONParseable> {
             }
             task.cryoResult = CryoResult(
                 request: request,
-                interceptor: self.interceptor
+                interceptor: self.interceptor,
+                authenticationContext: authenticationContext
             )
             task.response = request
             tasks[id] = task
@@ -588,8 +593,24 @@ public actor UploadManager<Model: JSONParseable> {
         // 取消优先
         if let afError = response.error?.asAFError, afError.isExplicitlyCancelledError {
             task.state = .cancelled
+            let failure = CryoFailure(
+                kind: .cancelled,
+                message: "请求已取消",
+                statusCode: response.response?.statusCode,
+                responseData: response.data,
+                underlyingError: afError
+            ).attachingAuthenticationRevision(task.cryoResult?.authenticationContext?.revision)
+            interceptor.handleFailure(failure, request: response.request)
         } else if let error = response.error as NSError?, error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled {
             task.state = .cancelled
+            let failure = CryoFailure(
+                kind: .cancelled,
+                message: "请求已取消",
+                statusCode: response.response?.statusCode,
+                responseData: response.data,
+                underlyingError: error
+            ).attachingAuthenticationRevision(task.cryoResult?.authenticationContext?.revision)
+            interceptor.handleFailure(failure, request: response.request)
         } else {
             // 在 actor 内同步处理业务拦截和模型解析，避免并发回调覆盖状态
             switch self.interceptor.interceptResponse(response) {
@@ -599,8 +620,15 @@ public actor UploadManager<Model: JSONParseable> {
                 if let json = try? JSON(data: businessData) {
                     task.model = json.toModel(Model.self)
                 }
-            case .failure:
+            case .failure(let error):
                 task.state = .failed
+                let failure = CryoFailure.wrapping(
+                    error,
+                    response: response.response,
+                    responseData: response.data,
+                    authenticationRevision: task.cryoResult?.authenticationContext?.revision
+                )
+                interceptor.handleFailure(failure, request: response.request)
             }
         }
 

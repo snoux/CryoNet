@@ -25,6 +25,13 @@ public protocol ResponseStructureConfig: Sendable {
     /// - Note:
     ///   - 仅在 `isSuccess(json:) == false` 的业务失败场景调用。
     func extractFailureReason(from json: JSON, originalData: Data) -> String?
+
+    /// 失败时从响应中提取业务错误码（可选）。
+    ///
+    /// - Note:
+    ///   - 仅在 `isSuccess(json:) == false` 的业务失败场景调用。
+    ///   - 该错误码会保存到 ``CryoFailure/businessCode``，便于全局处理登录失效等业务状态。
+    func extractBusinessCode(from json: JSON, originalData: Data) -> Int?
 }
 
 // MARK: - 协议扩展：提供默认实现
@@ -49,5 +56,10 @@ public extension ResponseStructureConfig {
             }
         }
         return nil
+    }
+
+    /// 默认实现：尝试读取常见的 `code` 字段。
+    func extractBusinessCode(from json: JSON, originalData: Data) -> Int? {
+        json["code"].int
     }
 }

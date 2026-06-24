@@ -9,7 +9,7 @@ import Alamofire
 ///
 /// - Note:
 ///   - 若不使用 `DefaultInterceptor`，可直接实现本协议并传入 `CryoNetConfiguration.interceptor`。
-///   - 建议在 `interceptResponse` 中保持“网络层错误优先、HTTP 非 2xx 失败优先”的处理顺序。
+///   - 建议在 `interceptResponse` 中保持“有 HTTP 响应时先判断非 2xx，否则再处理网络错误”的顺序。
 ///
 /// ### 使用示例
 /// ```swift
@@ -32,4 +32,19 @@ public protocol RequestInterceptorProtocol: Sendable {
 public protocol InterceptorConfigProvider {
     /// 获取拦截器配置信息
     func getInterceptorConfig() -> [String: Any]
+}
+
+// MARK: - 统一失败处理
+
+/// 拦截器的全局失败处理协议。
+///
+/// 使用该拦截器的 `intercept***` 请求发生最终失败时，CryoNet 会先调用
+/// `handleFailure`，然后再调用当前请求的可选局部失败回调。因此，即使调用方
+/// 未传入局部失败回调，全局处理仍会执行。
+public protocol CryoFailureHandling: Sendable {
+    /// 处理使用当前拦截器的请求失败。
+    /// - Parameters:
+    ///   - failure: 已标准化的统一失败信息。
+    ///   - request: 发生失败的 URL 请求；无法获取时为 `nil`。
+    func handleFailure(_ failure: CryoFailure, request: URLRequest?)
 }
