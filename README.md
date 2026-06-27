@@ -76,7 +76,29 @@ https://gitee.com/snoux/CryoNet.git
 ### 1) 初始化
 
 ```swift
+import Foundation
 import CryoNet
+import SwiftyJSON
+
+/// App 的通用响应规则。将多行闭包提取为方法，便于阅读、复用和单元测试。
+private enum AppResponsePolicy {
+    static func extractData(_ json: JSON, originalData: Data) -> Result<Data, Error> {
+        JSON.extractDataFromJSON(json["data"], originalData: originalData)
+    }
+
+    static func isSuccess(_ json: JSON) -> Bool {
+        json["code"].intValue == 0
+    }
+
+    static func extractFailureReason(_ json: JSON, originalData: Data) -> String? {
+        json["msg"].string
+    }
+
+    static func handleFailure(_ failure: CryoFailure, request: URLRequest?) {
+        // 本方法不保证在主线程执行，UI 操作需切换到 MainActor。
+        print(failure.message, request?.url?.absoluteString ?? "")
+    }
+}
 
 let cryoNet = CryoNet { config in
     config.baseURL = "https://api.example.com"
@@ -86,21 +108,15 @@ let cryoNet = CryoNet { config in
     ]
     config.tokenManager = DefaultTokenManager()
     config.interceptor = DefaultInterceptor(
-        extractData: { json, originalData in
-            // 自定义数据提取逻辑：提取业务字段（按照自己服务端数据结构直接提取相应层级数据）
-            JSON.extractDataFromJSON(json["data"], originalData: originalData)
-        },
-        isSuccess: { json in
-            // 自定义成功判断逻辑（按照自己服务端状态码判断请求是否正确，失败则进入failed）
-            return json["code"].intValue == 0
-        },
-        extractFailureReason: { json, _ in
-            // 自定义失败原因提取逻辑（直接从服务端响应数据中提取失败信息）
-            json["msg"].string
-        }
+        extractData: AppResponsePolicy.extractData,
+        isSuccess: AppResponsePolicy.isSuccess,
+        extractFailureReason: AppResponsePolicy.extractFailureReason,
+        handleFailure: AppResponsePolicy.handleFailure
     )
 }
 ```
+
+只有一行且不需要复用的规则可以直接保留在初始化闭包中；多行解析、全局失败动作和需要单元测试的规则，建议像上例一样提取为具名方法。
 
 你也可以在初始化 `CryoNet` 时不配置全局拦截器。
 这种情况下：
@@ -239,7 +255,7 @@ Task {
 
 配置一次 `DefaultInterceptor` 后，这些通用逻辑就会沉到网络层：
 - `isSuccess` 统一判断业务成功条件
-- `extractFailureReason` 统一提取错误信息
+- `extractFailureReason` 统一提取 HTTP 2xx 下的业务错误信息
 - `extractData` 统一提取真正业务数据
 
 业务层拿到的就是“可直接使用的数据”：
@@ -287,7 +303,7 @@ cryoNet.request(API.newsList)
 - 网络层错误：HTTP `2xx` 或未收到 HTTP 响应时，再处理超时、断网、DNS/TLS、请求取消等错误。
 - 业务层最后：仅在 HTTP `2xx` 且 JSON 可解析时，才会执行 `isSuccess`。
 - `isSuccess` 默认值：未配置时默认返回 `true`（即业务层默认成功）。
-- `extractFailureReason` 调用时机：仅在 `isSuccess == false` 时调用。
+- `extractFailureReason` 调用时机：仅在 HTTP 2xx 且 `isSuccess == false` 时调用。
 - `extractFailureReason` 默认逻辑：尝试 `message/msg/error/reason/detail`，取不到使用兜底文案。
 - 拦截器优先级：`request(..., interceptor:)` 传入的请求级拦截器优先；未传时回退到 `CryoNetConfiguration.interceptor`。
 - 未配置拦截器时：所有 `intercept***` 系列接口直接失败，提示使用 `response***` 系列接口。
@@ -370,7 +386,18 @@ let interceptor = DefaultInterceptor(
 
 ### 拦截器的单一全局失败入口
 
-继承 `DefaultInterceptor` 并重写 `handleFailure`，即可统一处理所有使用该拦截器的 `intercept***` 请求产生的 HTTP、业务、网络和解析失败。同步回调与 async/await 调用的规则相同。
+简单应用可以直接在 `DefaultInterceptor` 初始化时传入 `handleFailure`，无需为全局失败处理单独创建子类：
+
+```swift
+let interceptor = DefaultInterceptor(
+    extractData: AppResponsePolicy.extractData,
+    isSuccess: AppResponsePolicy.isSuccess,
+    extractFailureReason: AppResponsePolicy.extractFailureReason,
+    handleFailure: AppResponsePolicy.handleFailure
+)
+```
+
+需要复杂依赖、内部状态或扩展其他拦截行为时，再继承 `DefaultInterceptor` 并重写 `handleFailure`。两种方式都会统一处理使用该拦截器的 `intercept***` 请求产生的 HTTP、业务、网络和解析失败。同步回调与 async/await 调用的规则相同。
 
 `response***` 系列是不经过业务响应拦截的直接响应 API，不属于这个全局入口的触发范围。
 
@@ -429,70 +456,109 @@ final class AppInterceptor: DefaultInterceptor, @unchecked Sendable {
 - 写入共享状态或数据库。
 - 上报错误日志与监控事件。
 
-框架提供可选的 `DefaultAuthenticationSessionManager` Actor，用于原子维护登录状态和 UUID 会话 revision。revision 仅用于相等性比较：登录、退出或切换账号后生成新的 UUID；请求首次适配时会捕获当时的 revision，并保存到 `CryoFailure.authenticationRevision`。
+登录态有两种接入方式，优先选择简单的。
 
-使用默认状态管理器：
+##### 方式一：使用自己的登录态管理
+
+如果 App 已经有 `AppSession`、`AuthManager`、`UserManager` 等登录态管理，并且它们已经能保证退出登录幂等，可以不配置 `authenticationSession`：
 
 ```swift
-let tokenManager = MyTokenManager()
+let cryoNet = CryoNet { config in
+    config.interceptor = DefaultInterceptor(
+        extractData: AppResponsePolicy.extractData,
+        isSuccess: AppResponsePolicy.isSuccess,
+        extractFailureReason: AppResponsePolicy.extractFailureReason,
+        extractBusinessCode: AppResponsePolicy.extractBusinessCode,
+        handleFailure: { failure, _ in
+            let needLogout =
+                failure.statusCode == 401 ||
+                failure.businessCode == 10001
 
-// App 启动时根据用户自己的持久化 Token 恢复登录状态。
-let authenticationSession =
-    await DefaultAuthenticationSessionManager.restore(
-        using: tokenManager
-    )
+            guard needLogout else { return }
 
-final class AppInterceptor: DefaultInterceptor, @unchecked Sendable {
-    override func handleFailure(_ failure: CryoFailure, request: URLRequest?) {
-        let requiresLogin =
-            failure.statusCode == 401 ||
-            failure.businessCode == 10001
-
-        guard requiresLogin else { return }
-
-        Task {
-            // revision 比较与 authenticated -> loggingOut 在 Actor 内原子完成。
-            guard let authenticationSession,
-                  await authenticationSession.beginLogoutIfCurrent(
-                      expectedRevision: failure.authenticationRevision
-                  ) else {
-                return
+            Task { @MainActor in
+                AppSession.shared.logoutIfNeeded()
             }
-
-            // 清除 Token 的具体持久化方式仍由用户自己的账号系统负责。
-            await MainActor.run {
-                // SessionManager.shared.clearSession()
-                // Router.shared.showLogin()
-            }
-
-            await authenticationSession.markLoggedOut()
         }
-    }
+    )
 }
+```
 
-let interceptor = AppInterceptor(
-    extractData: { json, originalData in
-        JSON.extractDataFromJSON(json["data"], originalData: originalData)
-    },
-    isSuccess: { json in
-        json["code"].intValue == 0
-    },
-    extractFailureReason: { json, _ in
-        json["message"].string
-    },
-    extractBusinessCode: { json, _ in
-        json["code"].int
-    },
-    authenticationSession: authenticationSession
+这种方式最轻量，框架只负责把失败标准化为 `CryoFailure`，登录态并发保护由你的业务层负责。
+
+##### 方式二：使用框架登录态保护
+
+框架提供可选的 `DefaultAuthenticationSessionManager` Actor，用于原子维护登录状态和 UUID 会话 revision。revision 仅用于相等性比较：登录、退出或切换账号后生成新的 UUID；请求首次适配时会捕获当时的 revision，并保存到 `CryoFailure.authenticationRevision`。
+
+这种方式适合希望框架帮助处理以下问题的场景：
+
+- 多个请求同时返回登录失效时，只执行一次退出登录。
+- 旧请求延迟返回登录失效时，不踢掉用户后来重新登录的新会话。
+- 不想在拦截器里维护 `isLoggingOut` 等可变状态。
+
+推荐使用同步初始化，不需要 `await`。注意这里读取的是 App 启动时的初始 Token，用于初始化运行期登录态；后续登录、退出或切换账号时，需要显式调用 `markAuthenticated()` / `markLoggedOut()` 同步状态：
+
+```swift
+let initialToken = AppSession.shared.token
+let tokenManager = DefaultTokenManager(token: initialToken)
+
+let authenticationSession = DefaultAuthenticationSessionManager(
+    isAuthenticated: initialToken != nil
 )
+
+let cryoNet = CryoNet { config in
+    config.tokenManager = tokenManager
+    config.interceptor = DefaultInterceptor(
+        extractData: AppResponsePolicy.extractData,
+        isSuccess: AppResponsePolicy.isSuccess,
+        extractFailureReason: AppResponsePolicy.extractFailureReason,
+        extractBusinessCode: AppResponsePolicy.extractBusinessCode,
+        authenticationSession: authenticationSession,
+        handleFailure: { failure, _ in
+            let needLogout =
+                failure.statusCode == 401 ||
+                failure.businessCode == 10001
+
+            guard needLogout else { return }
+
+            Task {
+                // 自动使用 failure.authenticationRevision 做会话一致性校验。
+                guard await authenticationSession.beginLogoutIfCurrent(
+                    for: failure
+                ) else {
+                    return
+                }
+
+                await MainActor.run {
+                    AppSession.shared.clear()
+                    AppRouter.shared.showLogin()
+                }
+
+                await tokenManager.clearToken()
+                await authenticationSession.markLoggedOut()
+            }
+        }
+    )
+}
 ```
 
 登录成功后，用户先持久化 Token，再更新框架运行期状态：
 
 ```swift
+AppSession.shared.saveToken(newToken)
 await tokenManager.setToken(newToken)
 await authenticationSession.markAuthenticated()
 ```
+
+主动退出登录时同样建议同步清理：
+
+```swift
+AppSession.shared.clear()
+await tokenManager.clearToken()
+await authenticationSession.markLoggedOut()
+```
+
+如果 App 启动时必须异步读取 Token，也可以使用 `DefaultAuthenticationSessionManager.restore(using:)`，但它不能放在全局变量初始化中，因为 Swift 全局变量初始化不能 `await`。多数 App 推荐用 `initialToken + isAuthenticated:` 同步初始化，把 Token 持久化读写继续交给自己的账号系统或 `TokenManagerProtocol`。
 
 用户也可以实现 `AuthenticationSessionManaging`，使用自己的 Actor、Keychain、UserDefaults、数据库或账号系统。自定义实现必须保证 `beginLogoutIfCurrent(expectedRevision:)` 中的 revision 比较与状态切换是原子操作。
 
@@ -508,8 +574,14 @@ actor AppAuthenticationSession: AuthenticationSessionManaging {
     func snapshot() -> AuthenticationSnapshot {
         AuthenticationSnapshot(state: state, revision: revision)
     }
-    // 自行当前会话是否登录
     func beginLogoutIfCurrent(expectedRevision: UUID?) -> Bool {
+        if let expectedRevision, expectedRevision != revision {
+            return false
+        }
+        guard state == .authenticated else {
+            return false
+        }
+        state = .loggingOut
         return true
     }
     // 已认证（登录）
@@ -612,7 +684,7 @@ let cryoNet = CryoNet { config in
     config.basicHeaders = [
         .init(name: "Content-Type", value: "application/json")
     ]
-    config.tokenManager = MyTokenManager()
+    config.tokenManager = DefaultTokenManager(token: AppSession.shared.token)
     config.interceptor = appInterceptor
 }
 ```
@@ -761,6 +833,7 @@ final class MyBusinessInterceptor: DefaultInterceptor, @unchecked Sendable {
 final class MyTokenManager: TokenManagerProtocol, @unchecked Sendable {
     func getToken() async -> String? { "token" }
     func setToken(_ newToken: String) async {}
+    func clearToken() async {}
     func refreshToken() async -> String? { nil }
 }
 ```

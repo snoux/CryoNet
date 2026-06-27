@@ -22,6 +22,28 @@ final class CryoNetTests: XCTestCase {
         XCTAssertEqual(model.method, HTTPMethod.post)
     }
 
+    func testDefaultTokenManagerCanClearToken() async {
+        let tokenManager = DefaultTokenManager(token: "token")
+
+        await tokenManager.clearToken()
+        let token = await tokenManager.getToken()
+
+        XCTAssertNil(token)
+    }
+
+    func testDefaultInterceptorDoesNotInjectEmptyToken() async {
+        let interceptor = DefaultInterceptor()
+        let tokenManager = DefaultTokenManager(token: "")
+        let url = URL(string: "https://example.com")!
+
+        let request = await interceptor.interceptRequest(
+            URLRequest(url: url),
+            tokenManager: tokenManager
+        )
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
     func testDownloadPauseDoesNotChangeIdleTaskState() async {
         let manager = DownloadManager()
         let id = await manager.addTask(pathOrURL: "https://example.com/file.txt")
@@ -105,6 +127,26 @@ final class CryoNetTests: XCTestCase {
         XCTAssertTrue(localCallbackObservedGlobalHandler)
     }
 
+    func testConvenienceInitializerInvokesFailureHandler() {
+        let expectation = expectation(description: "便捷初始化的全局失败闭包已执行")
+        let interceptor = DefaultInterceptor(handleFailure: { failure, request in
+            XCTAssertEqual(failure.kind, .http)
+            XCTAssertEqual(failure.statusCode, 503)
+            XCTAssertEqual(request?.url?.absoluteString, "https://example.com/news")
+            expectation.fulfill()
+        })
+        let failure = CryoFailure(
+            kind: .http,
+            message: "服务不可用",
+            statusCode: 503
+        )
+        let request = URLRequest(url: URL(string: "https://example.com/news")!)
+
+        interceptor.handleFailure(failure, request: request)
+
+        wait(for: [expectation], timeout: 1)
+    }
+
     func testBusinessFailureExtractsBusinessCode() throws {
         let interceptor = DefaultInterceptor(
             isSuccess: { _ in false },
@@ -175,6 +217,22 @@ final class CryoNetTests: XCTestCase {
         let snapshot = await manager.snapshot()
 
         XCTAssertEqual(snapshot.state, .authenticated)
+    }
+
+    func testAuthenticationSessionConvenienceInitializerAndFailureLogout() async {
+        let manager = DefaultAuthenticationSessionManager(isAuthenticated: true)
+        let snapshot = await manager.snapshot()
+        let failure = CryoFailure(
+            kind: .authenticationExpired,
+            message: "登录已失效",
+            authenticationRevision: snapshot.revision
+        )
+
+        let first = await manager.beginLogoutIfCurrent(for: failure)
+        let second = await manager.beginLogoutIfCurrent(for: failure)
+
+        XCTAssertTrue(first)
+        XCTAssertFalse(second)
     }
 
     func testFailureKeepsCapturedAuthenticationRevision() {

@@ -5,7 +5,7 @@ import SwiftyJSON
 
 /// `ResponseStructureConfig` 响应结构配置协议。
 ///
-/// 用户可通过闭包或自定义类型，声明响应是否成功、如何提取业务数据、失败时如何提取失败原因。
+/// 用户可通过闭包或自定义类型，声明响应是否成功、如何提取业务数据、失败时如何提取业务失败原因。
 ///
 /// - Note:
 ///   - 在 `DefaultInterceptor` 中，网络层错误（AFError/URLError）与 HTTP 非 2xx 会先返回失败，
@@ -20,7 +20,7 @@ public protocol ResponseStructureConfig: Sendable {
     /// 从 JSON 提取数据并转换为 Data（可重写）
     func extractData(from json: JSON, originalData: Data) -> Result<Data, Error>
 
-    /// 失败时从响应中提取错误原因（可选）
+    /// 业务失败时从响应中提取错误原因（可选）。
     ///
     /// - Note:
     ///   - 仅在 `isSuccess(json:) == false` 的业务失败场景调用。
@@ -46,7 +46,7 @@ public extension ResponseStructureConfig {
         .success(originalData)
     }
 
-    /// 默认实现：自动提取常见失败字段，提取失败返回 nil（由上层使用兜底文案）
+    /// 默认实现：自动提取常见业务失败字段，提取失败返回 `nil`。
     func extractFailureReason(from json: JSON, originalData: Data) -> String? {
         let commonKeys = ["message", "msg", "error", "reason", "detail"]
         for key in commonKeys {

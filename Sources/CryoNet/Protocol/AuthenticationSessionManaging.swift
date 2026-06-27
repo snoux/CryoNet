@@ -52,6 +52,18 @@ public protocol AuthenticationSessionManaging: Sendable {
     func markLoggedOut() async
 }
 
+public extension AuthenticationSessionManaging {
+    /// 当前失败仍属于现有登录会话时，原子切换到退出中。
+    ///
+    /// 这是 ``beginLogoutIfCurrent(expectedRevision:)`` 的便捷封装，会自动使用
+    /// ``CryoFailure/authenticationRevision``，适合在 `handleFailure` 中直接调用。
+    /// - Parameter failure: 当前请求产生的统一失败信息。
+    /// - Returns: 当前调用是否获得执行退出操作的权限。
+    func beginLogoutIfCurrent(for failure: CryoFailure) async -> Bool {
+        await beginLogoutIfCurrent(expectedRevision: failure.authenticationRevision)
+    }
+}
+
 /// 线程安全的默认认证会话状态管理器。
 ///
 /// 该实现通过 Actor 保证 revision 比较和状态切换为原子操作。Token 的持久化仍由用户自己的
@@ -72,6 +84,20 @@ public actor DefaultAuthenticationSessionManager: AuthenticationSessionManaging 
         initialRevision: UUID = UUID()
     ) {
         self.state = initialState
+        self.revision = initialRevision
+    }
+
+    /// 根据当前是否已登录创建默认认证会话状态管理器。
+    ///
+    /// 适合 App 启动时可以同步判断本地是否存在 Token 或账号信息的场景。
+    /// - Parameters:
+    ///   - isAuthenticated: 当前是否已登录。
+    ///   - initialRevision: 初始会话 revision，默认自动生成 UUID。
+    public init(
+        isAuthenticated: Bool,
+        initialRevision: UUID = UUID()
+    ) {
+        self.state = isAuthenticated ? .authenticated : .unauthenticated
         self.revision = initialRevision
     }
 

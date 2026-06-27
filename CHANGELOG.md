@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 拦截器便捷配置
+
+- `DefaultInterceptor` 初始化器新增 `handleFailure` 闭包，简单应用无需创建子类即可配置全局失败处理。
+- `DefaultInterceptor(responseConfig:authenticationSession:handleFailure:)` 同样支持闭包式全局失败处理。
+- `TokenManagerProtocol` 与 `DefaultTokenManager` 新增 `clearToken()`；默认拦截器忽略空字符串 Token，避免注入空 `Authorization`。
+- `DefaultAuthenticationSessionManager` 新增 `isAuthenticated:` 同步初始化方式，避免全局配置时必须使用 `await restore(using:)`。
+- `AuthenticationSessionManaging` 新增 `beginLogoutIfCurrent(for:)` 便捷方法，可直接基于 `CryoFailure.authenticationRevision` 做会话校验。
+- 文档补充 `extractFailureReason` 的调用时机：仅在 HTTP 2xx 且业务判定失败时用于提取业务失败原因。
+
 ### 统一失败模型
 
 - 新增 `CryoFailure`，统一表示 HTTP、业务、网络、解析、取消和未配置拦截器等失败。
